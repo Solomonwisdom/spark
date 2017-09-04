@@ -433,6 +433,25 @@ private[spark] class Executor(
 
         setTaskFinishedAndClearInterruptStatus()
         execBackend.statusUpdate(taskId, TaskState.FINISHED, serializedResult)
+        val actualComputingTime = task.metrics.executorRunTime * 1000000 -
+          task.metrics.shuffleReadMetrics.fetchWaitTime -
+          task.metrics.shuffleWriteMetrics.writeTime -
+          task.metrics.jvmGCTime
+
+        val ghandzhipengTaskInfo = s"ghandzhipengCoreTaskInfo=" +
+          s"JobId:${task.jobId.get}=" +
+          s"StageId:${task.stageId}=" +
+          s"partitionIdRDD:${task.partitionId}=" +
+          s"taskId:${taskId}=" +
+          s"DeserializationTime:${task.metrics.executorDeserializeTime}=" +
+          s"executorRunTime:${task.metrics.executorRunTime}=" +
+          s"ShuffleReadFetchWaitTime:${task.metrics.shuffleReadMetrics.fetchWaitTime}=" +
+          s"ShuffleWriteTime:${task.metrics.shuffleWriteMetrics.writeTime}=" +
+          s"GCtime:${task.metrics.jvmGCTime}=" +
+          s"ResultSerializationTime:${task.metrics.resultSerializationTime}"
+
+        /* Getting result time is not here. Because it is computed by DagScheduler. */
+        logInfo(ghandzhipengTaskInfo)
 
       } catch {
         case t: Throwable if hasFetchFailure && !Utils.isFatalError(t) =>
