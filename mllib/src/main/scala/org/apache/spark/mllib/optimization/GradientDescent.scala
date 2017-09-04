@@ -232,7 +232,11 @@ object GradientDescent extends Logging {
     var converged = false // indicates whether converged based on convergenceTol
     var i = 1
     while (!converged && i <= numIterations) {
+      val ghandStartTime = System.currentTimeMillis()
+      logInfo(s"ghandzhipengMLlibBroadcastStartsTime:${ghandStartTime}")
       val bcWeights = data.context.broadcast(weights)
+      logInfo(s"ghandzhipengMLlibBroadcastEndsTime:${System.currentTimeMillis()}")
+      logInfo(s"ghandzhipengMLlibBroadcastElapses:${System.currentTimeMillis() - ghandStartTime}")
       // Sample a subset (fraction miniBatchFraction) of the total data
       // compute and sum up the subgradients on this subset (this is one map-reduce)
       val (gradientSum, lossSum, miniBatchSize) = data.sample(false, miniBatchFraction, 42 + i)
@@ -253,19 +257,34 @@ object GradientDescent extends Logging {
          * lossSum is computed using the weights from the previous iteration
          * and regVal is the regularization value computed in the previous iteration as well.
          */
-        stochasticLossHistory += lossSum / miniBatchSize + regVal
+        val ghandzhipengLoss = lossSum / miniBatchSize + regVal
+        stochasticLossHistory += ghandzhipengLoss
+        logInfo(s"ghandzhipengMLlib=Iterationtime(ms)ConstUpdate:${System.currentTimeMillis()}=" +
+          s"iterationId:${i}=loss:${ghandzhipengLoss}")
+
+        val ghandDriverUpdateStartsTime = System.currentTimeMillis()
+        logInfo(s"ghandzhipengMLlib=updateWeightOnDriverStartsTime:${ghandDriverUpdateStartsTime}")
         val update = updater.compute(
           weights, Vectors.fromBreeze(gradientSum / miniBatchSize.toDouble),
           stepSize, i, regParam)
         weights = update._1
         regVal = update._2
+        logInfo(s"ghandzhipengMLlib=updateWeightOnDriverEndsTime:${System.currentTimeMillis()}")
+        logInfo(s"ghandzhipengMLlib=updateWeightOnDriverElapses:" +
+          s"${System.currentTimeMillis() - ghandDriverUpdateStartsTime}")
 
+        val judgeConvergeStartTime = System.currentTimeMillis()
+        logInfo(s"ghandzhipengMLlib=JudgeConvergeStartsTime:${judgeConvergeStartTime}")
         previousWeights = currentWeights
         currentWeights = Some(weights)
         if (previousWeights != None && currentWeights != None) {
           converged = isConverged(previousWeights.get,
             currentWeights.get, convergenceTol)
         }
+        logInfo(s"ghandzhipengMLlib=JudgeConvergeEndsTime:${System.currentTimeMillis()}")
+        logInfo(s"ghandzhipengMLlib=JudgeConvergeElapsesTime:" +
+          s"${System.currentTimeMillis() - judgeConvergeStartTime}")
+
       } else {
         logWarning(s"Iteration ($i/$numIterations). The size of sampled batch is zero")
       }
