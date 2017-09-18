@@ -20,9 +20,8 @@ package org.apache.spark.util.random
 import java.util.Random
 
 import scala.reflect.ClassTag
-
 import org.apache.commons.math3.distribution.PoissonDistribution
-
+import org.apache.spark.TaskContext
 import org.apache.spark.annotation.DeveloperApi
 
 /**
@@ -39,7 +38,11 @@ trait RandomSampler[T, U] extends Pseudorandom with Cloneable with Serializable 
 
   /** take a random sample */
   def sample(items: Iterator[T]): Iterator[U] =
-    items.filter(_ => sample > 0).asInstanceOf[Iterator[U]]
+    items.filter{
+      _ =>
+//        TaskContext.logSampleFilter
+        sample > 0
+    }.asInstanceOf[Iterator[U]]
 
   /**
    * Whether to sample the next item or not.

@@ -78,6 +78,9 @@ private[spark] class ShuffleMapTask(
     // Deserialize the RDD using the broadcast variable.
     val threadMXBean = ManagementFactory.getThreadMXBean
     val deserializeStartTime = System.currentTimeMillis()
+
+    val ghandExecutorDeserialStarts = deserializeStartTime
+
     val deserializeStartCpuTime = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
       threadMXBean.getCurrentThreadCpuTime
     } else 0L
@@ -85,6 +88,12 @@ private[spark] class ShuffleMapTask(
     val (rdd, dep) = ser.deserialize[(RDD[_], ShuffleDependency[_, _, _])](
       ByteBuffer.wrap(taskBinary.value), Thread.currentThread.getContextClassLoader)
     _executorDeserializeTime = System.currentTimeMillis() - deserializeStartTime
+
+    val ghandExecutorDeserialEnds = System.currentTimeMillis()
+
+    logInfo(s"ghandCP=taskAttemptID:${context.taskAttemptId()}=ExecutorDeserialStarts:${ghandExecutorDeserialStarts}=" +
+      s"ExecutorDeserialEnds:${ghandExecutorDeserialEnds}")
+
     _executorDeserializeCpuTime = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
       threadMXBean.getCurrentThreadCpuTime - deserializeStartCpuTime
     } else 0L

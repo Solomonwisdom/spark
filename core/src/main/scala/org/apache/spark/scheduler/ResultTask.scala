@@ -25,6 +25,7 @@ import java.util.Properties
 import org.apache.spark._
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
+import org.apache.spark.internal.Logging
 
 /**
  * A task that sends back the output to the driver application.
@@ -63,7 +64,7 @@ private[spark] class ResultTask[T, U](
     appAttemptId: Option[String] = None)
   extends Task[U](stageId, stageAttemptId, partition.index, localProperties, serializedTaskMetrics,
     jobId, appId, appAttemptId)
-  with Serializable {
+  with Serializable with Logging{
 
   @transient private[this] val preferredLocs: Seq[TaskLocation] = {
     if (locs == null) Nil else locs.toSet.toSeq
@@ -73,6 +74,9 @@ private[spark] class ResultTask[T, U](
     // Deserialize the RDD and the func using the broadcast variables.
     val threadMXBean = ManagementFactory.getThreadMXBean
     val deserializeStartTime = System.currentTimeMillis()
+
+    val ghandExecutorDeserialStarts = deserializeStartTime
+
     val deserializeStartCpuTime = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
       threadMXBean.getCurrentThreadCpuTime
     } else 0L
@@ -83,7 +87,10 @@ private[spark] class ResultTask[T, U](
     _executorDeserializeCpuTime = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
       threadMXBean.getCurrentThreadCpuTime - deserializeStartCpuTime
     } else 0L
+    val ghandExecutorDeserialEnds = System.currentTimeMillis()
 
+    logInfo(s"ghandCP=taskAttemptID:${context.taskAttemptId()}=ExecutorDeserialStarts:${ghandExecutorDeserialStarts}=" +
+      s"ExecutorDeserialEnds:${ghandExecutorDeserialEnds}")
     func(context, rdd.iterator(partition, context))
   }
 

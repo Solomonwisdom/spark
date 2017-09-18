@@ -289,6 +289,9 @@ private[spark] class Executor(
       val threadMXBean = ManagementFactory.getThreadMXBean
       val taskMemoryManager = new TaskMemoryManager(env.memoryManager, taskId)
       val deserializeStartTime = System.currentTimeMillis()
+
+      val ghandDeserializeStartTime = System.currentTimeMillis()
+
       val deserializeStartCpuTime = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
         threadMXBean.getCurrentThreadCpuTime
       } else 0L
@@ -332,6 +335,10 @@ private[spark] class Executor(
         }
 
         // Run the actual task and measure its runtime.
+        val ghandDeserializeEndsTime = System.currentTimeMillis()
+
+        val ghandTaskStart = ghandDeserializeEndsTime
+
         taskStart = System.currentTimeMillis()
         taskStartCpu = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
           threadMXBean.getCurrentThreadCpuTime
@@ -377,6 +384,7 @@ private[spark] class Executor(
             s"swallowing Spark's internal ${classOf[FetchFailedException]}", fetchFailure)
         }
         val taskFinish = System.currentTimeMillis()
+        val ghandTaskFinish = taskFinish
         val taskFinishCpu = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
           threadMXBean.getCurrentThreadCpuTime
         } else 0L
@@ -386,8 +394,11 @@ private[spark] class Executor(
 
         val resultSer = env.serializer.newInstance()
         val beforeSerialization = System.currentTimeMillis()
+
+        val ghandSerializeResultStartTime = beforeSerialization
         val valueBytes = resultSer.serialize(value)
         val afterSerialization = System.currentTimeMillis()
+        val ghandSerializeResultEndsTime = afterSerialization
 
         // Deserialization happens in two parts: first, we deserialize a Task object, which
         // includes the Partition. Second, Task.run() deserializes the RDD and function to be run.
@@ -405,11 +416,14 @@ private[spark] class Executor(
         // Note: accumulator updates must be collected after TaskMetrics is updated
         val accumUpdates = task.collectAccumulatorUpdates()
         // TODO: do not serialize value twice
+        val ghandSerialize2Starts = System.currentTimeMillis()
         val directResult = new DirectTaskResult(valueBytes, accumUpdates)
         val serializedDirectResult = ser.serialize(directResult)
         val resultSize = serializedDirectResult.limit
+        val ghandSerialize2Ends = System.currentTimeMillis()
 
         // directSend = sending directly back to the driver
+        val ghandPutResultsIntoLocalBlockManagerStarts = System.currentTimeMillis()
         val serializedResult: ByteBuffer = {
           if (maxResultSize > 0 && resultSize > maxResultSize) {
             logWarning(s"Finished $taskName (TID $taskId). Result is larger than maxResultSize " +
@@ -430,28 +444,34 @@ private[spark] class Executor(
             serializedDirectResult
           }
         }
+        val ghandPutResultsIntoLocalBlockManagerEnds = System.currentTimeMillis()
 
         setTaskFinishedAndClearInterruptStatus()
-        execBackend.statusUpdate(taskId, TaskState.FINISHED, serializedResult)
-        val actualComputingTime = task.metrics.executorRunTime * 1000000 -
-          task.metrics.shuffleReadMetrics.fetchWaitTime -
-          task.metrics.shuffleWriteMetrics.writeTime -
-          task.metrics.jvmGCTime
-
-        val ghandzhipengTaskInfo = s"ghandzhipengCoreTaskInfo=" +
+        val ghandzhipengTaskInfo = s"ghandCP=Executor=" +
           s"JobId:${task.jobId.get}=" +
           s"StageId:${task.stageId}=" +
-          s"partitionIdRDD:${task.partitionId}=" +
-          s"taskId:${taskId}=" +
-          s"DeserializationTime:${task.metrics.executorDeserializeTime}=" +
-          s"executorRunTime:${task.metrics.executorRunTime}=" +
-          s"ShuffleReadFetchWaitTime:${task.metrics.shuffleReadMetrics.fetchWaitTime}=" +
-          s"ShuffleWriteTime:${task.metrics.shuffleWriteMetrics.writeTime}=" +
+          s"PartitionId:${task.partitionId}=" +
+          s"TaskId:${taskId}=" +
+          s"TaskAttemptId:${task.context.taskAttemptId}=" +
+          s"taskDeserializeStarts:${ghandDeserializeStartTime}=" +
+          s"taskDeserializeEnds:${ghandDeserializeEndsTime}=" +
+          s"taskRunStarts:${ghandTaskStart}=" +
+          s"taskRunEnds:${ghandTaskFinish}=" +
+          s"taskResultSerialStarts:${ghandSerializeResultStartTime}=" +
+          s"taskResultSerialEnds:${ghandSerializeResultEndsTime}=" +
+          s"taskResultSerial2Starts:${ghandSerialize2Starts}=" +
+          s"taskResultSerial2Ends:${ghandSerialize2Ends}=" +
+          s"taskPutResultIntoLocalBlockMangerStarts:${ghandPutResultsIntoLocalBlockManagerStarts}=" +
+          s"taskPutResultIntoLocalBlockMangerEnds:${ghandPutResultsIntoLocalBlockManagerEnds}=" +
           s"GCtime:${task.metrics.jvmGCTime}=" +
-          s"ResultSerializationTime:${task.metrics.resultSerializationTime}"
+          s"ShuffleReadFetchWaitTime:${task.metrics.shuffleReadMetrics.fetchWaitTime}=" +
+          s"ShuffleWriteTime:${task.metrics.shuffleWriteMetrics.writeTime}"
 
-        /* Getting result time is not here. Because it is computed by DagScheduler. */
         logInfo(ghandzhipengTaskInfo)
+
+        execBackend.statusUpdate(taskId, TaskState.FINISHED, serializedResult)
+        /* Getting result time is not here. Because it is computed by DagScheduler. */
+
 
       } catch {
         case t: Throwable if hasFetchFailure && !Utils.isFatalError(t) =>

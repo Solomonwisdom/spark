@@ -312,7 +312,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
 
           logDebug(s"Launching task ${task.taskId} on executor id: ${task.executorId} hostname: " +
             s"${executorData.executorHost}.")
-
+          logInfo(s"ghandCP=driverLanuchTaskViaRPC=taskId:${task.taskId}=driverLanuchTime:${System.currentTimeMillis()}")
           executorData.executorEndpoint.send(LaunchTask(new SerializableBuffer(serializedTask)))
         }
       }

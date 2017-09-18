@@ -19,8 +19,9 @@ package org.apache.spark.scheduler
 
 import java.util.concurrent.atomic.AtomicInteger
 
-import scala.concurrent.{Future, Promise}
+import org.apache.spark.TaskContext
 
+import scala.concurrent.{Future, Promise}
 import org.apache.spark.internal.Logging
 
 /**
@@ -55,6 +56,7 @@ private[spark] class JobWaiter[T](
 
   override def taskSucceeded(index: Int, result: Any): Unit = {
     // resultHandler call must be synchronized in case resultHandler itself is not thread safe.
+    // there are no taskContext here. Because now we are on driver.
     synchronized {
       resultHandler(index, result.asInstanceOf[T])
     }

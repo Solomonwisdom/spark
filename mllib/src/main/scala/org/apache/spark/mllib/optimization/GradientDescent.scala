@@ -18,9 +18,8 @@
 package org.apache.spark.mllib.optimization
 
 import scala.collection.mutable.ArrayBuffer
-
 import breeze.linalg.{norm, DenseVector => BDV}
-
+import org.apache.spark.TaskContext
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.Logging
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
@@ -39,8 +38,8 @@ class GradientDescent private[spark] (private var gradient: Gradient, private va
   private var numIterations: Int = 100
   private var regParam: Double = 0.0
   private var miniBatchFraction: Double = 1.0
-  private var convergenceTol: Double = 0.001
-
+//  private var convergenceTol: Double = 0.001
+  private var convergenceTol: Double = 0.0
   /**
    * Set the initial step size of SGD for the first step. Default 1.0.
    * In subsequent steps, the step size will decrease with stepSize/sqrt(t)
@@ -232,25 +231,30 @@ object GradientDescent extends Logging {
     var converged = false // indicates whether converged based on convergenceTol
     var i = 1
     while (!converged && i <= numIterations) {
-      val ghandStartTime = System.currentTimeMillis()
-      logInfo(s"ghandzhipengMLlibBroadcastStartsTime:${ghandStartTime}")
+      logInfo(s"ghandCP=IterationId:${i}=BroadcastStartsTime:${System.currentTimeMillis()}")
       val bcWeights = data.context.broadcast(weights)
-      logInfo(s"ghandzhipengMLlibBroadcastEndsTime:${System.currentTimeMillis()}")
-      logInfo(s"ghandzhipengMLlibBroadcastElapses:${System.currentTimeMillis() - ghandStartTime}")
+      logInfo(s"ghandCP=IterationId:${i}=BroadcastEndsTime:${System.currentTimeMillis()}")
       // Sample a subset (fraction miniBatchFraction) of the total data
       // compute and sum up the subgradients on this subset (this is one map-reduce)
       val (gradientSum, lossSum, miniBatchSize) = data.sample(false, miniBatchFraction, 42 + i)
         .treeAggregate((BDV.zeros[Double](n), 0.0, 0L))(
           seqOp = (c, v) => {
+//            TaskContext.logSeqOp
             // c: (grad, loss, count), v: (label, features)
             val l = gradient.compute(v._2, v._1, bcWeights.value, Vectors.fromBreeze(c._1))
             (c._1, c._2 + l, c._3 + 1)
           },
           combOp = (c1, c2) => {
+//            TaskContext.logCombOp
+            // user code cannot get into these function, since this function will be transfered
+            // to resulthandler, they are very sensitive to user Functions. A Spark problem.
             // c: (grad, loss, count)
             (c1._1 += c2._1, c1._2 + c2._2, c1._3 + c2._3)
-          })
+          }
+        )
+      logInfo(s"ghandCP=IterationId:${i}=DestroyBroadcastStartsTime:${System.currentTimeMillis()}")
       bcWeights.destroy(blocking = false)
+      logInfo(s"ghandCP=IterationId:${i}=DestroyBroadcastEndsTime:${System.currentTimeMillis()}")
 
       if (miniBatchSize > 0) {
         /**
@@ -259,31 +263,25 @@ object GradientDescent extends Logging {
          */
         val ghandzhipengLoss = lossSum / miniBatchSize + regVal
         stochasticLossHistory += ghandzhipengLoss
-        logInfo(s"ghandzhipengMLlib=Iterationtime(ms)ConstUpdate:${System.currentTimeMillis()}=" +
-          s"iterationId:${i}=loss:${ghandzhipengLoss}")
+        logInfo(s"ghandzhipengMLlib=IterationId:${i}=ConstUpdateIterationtime(ms):" +
+          s"${System.currentTimeMillis()}=Loss:${ghandzhipengLoss}")
 
-        val ghandDriverUpdateStartsTime = System.currentTimeMillis()
-        logInfo(s"ghandzhipengMLlib=updateWeightOnDriverStartsTime:${ghandDriverUpdateStartsTime}")
+        logInfo(s"ghandCP=IterationId:${i}=updateWeightOnDriverStartsTime:${System.currentTimeMillis()}")
         val update = updater.compute(
           weights, Vectors.fromBreeze(gradientSum / miniBatchSize.toDouble),
           stepSize, i, regParam)
         weights = update._1
         regVal = update._2
-        logInfo(s"ghandzhipengMLlib=updateWeightOnDriverEndsTime:${System.currentTimeMillis()}")
-        logInfo(s"ghandzhipengMLlib=updateWeightOnDriverElapses:" +
-          s"${System.currentTimeMillis() - ghandDriverUpdateStartsTime}")
+        logInfo(s"ghandCP=IterationId:${i}=updateWeightOnDriverEndsTime:${System.currentTimeMillis()}")
 
-        val judgeConvergeStartTime = System.currentTimeMillis()
-        logInfo(s"ghandzhipengMLlib=JudgeConvergeStartsTime:${judgeConvergeStartTime}")
+        logInfo(s"ghandCP=IterationId:${i}=JudgeConvergeStartsTime:${System.currentTimeMillis()}")
         previousWeights = currentWeights
         currentWeights = Some(weights)
         if (previousWeights != None && currentWeights != None) {
           converged = isConverged(previousWeights.get,
             currentWeights.get, convergenceTol)
         }
-        logInfo(s"ghandzhipengMLlib=JudgeConvergeEndsTime:${System.currentTimeMillis()}")
-        logInfo(s"ghandzhipengMLlib=JudgeConvergeElapsesTime:" +
-          s"${System.currentTimeMillis() - judgeConvergeStartTime}")
+        logInfo(s"ghandCP=IterationId:${i}=JudgeConvergeEndsTime:${System.currentTimeMillis()}")
 
       } else {
         logWarning(s"Iteration ($i/$numIterations). The size of sampled batch is zero")

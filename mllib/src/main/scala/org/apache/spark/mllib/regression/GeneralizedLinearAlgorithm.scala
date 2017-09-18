@@ -17,7 +17,7 @@
 
 package org.apache.spark.mllib.regression
 
-import org.apache.spark.SparkException
+import org.apache.spark.{SparkException, TaskContext}
 import org.apache.spark.annotation.{DeveloperApi, Since}
 import org.apache.spark.internal.Logging
 import org.apache.spark.mllib.feature.StandardScaler
@@ -294,7 +294,9 @@ abstract class GeneralizedLinearAlgorithm[M <: GeneralizedLinearModel]
         if (useFeatureScaling) {
           input.map(lp => (lp.label, scaler.transform(lp.features))).cache()
         } else {
-          input.map(lp => (lp.label, lp.features))
+          input.map{lp =>
+//            TaskContext.logInputMap
+            (lp.label, lp.features)}
         }
       }
 

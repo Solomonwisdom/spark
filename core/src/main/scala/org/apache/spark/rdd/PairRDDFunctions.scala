@@ -1106,7 +1106,13 @@ class PairRDDFunctions[K, V](self: RDD[(K, V)])
   /**
    * Return an RDD with the values of each tuple.
    */
-  def values: RDD[V] = self.map(_._2)
+  def values: RDD[V] = {
+    self.map{
+      x =>
+//        TaskContext.logGetValuesRDD
+        x._2
+    }
+  }
 
   private[spark] def keyClass: Class[_] = kt.runtimeClass
 

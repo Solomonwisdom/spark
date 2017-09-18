@@ -327,11 +327,15 @@ abstract class RDD[T: ClassTag](
 
   /**
    * Gets or computes an RDD partition. Used by RDD.iterator() when an RDD is cached.
+    * ----ghandzhipeng: this function is called only once because you only need to compute the
+    * iterator for each RDD once.
    */
   private[spark] def getOrCompute(partition: Partition, context: TaskContext): Iterator[T] = {
     val blockId = RDDBlockId(id, partition.index)
     var readCachedBlock = true
     // This method is called on executors, so we need call SparkEnv.get instead of sc.env.
+    logInfo(s"ghandzhipengCoreGetOrCompute=StageId:${context.stageId()}=PartitionId:${context.partitionId()}="+
+    s"TaskAttemptId:${context.taskAttemptId()}")
     SparkEnv.get.blockManager.getOrElseUpdate(blockId, storageLevel, elementClassTag, () => {
       readCachedBlock = false
       computeOrReadCheckpoint(partition, context)
@@ -1146,7 +1150,12 @@ abstract class RDD[T: ClassTag](
         numPartitions /= scale
         val curNumPartitions = numPartitions
         partiallyAggregated = partiallyAggregated.mapPartitionsWithIndex {
-          (i, iter) => iter.map((i % curNumPartitions, _))
+          (i, iter) =>
+            iter.map{
+              x =>
+//                TaskContext.logMapPartitionWithIndex
+                (i % curNumPartitions, x)
+            }
         }.foldByKey(zeroValue, new HashPartitioner(curNumPartitions))(cleanCombOp).values
       }
       val copiedZeroValue = Utils.clone(zeroValue, sc.env.closureSerializer.newInstance())

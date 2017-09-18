@@ -26,9 +26,9 @@ import org.apache.spark.memory.TaskMemoryManager
 import org.apache.spark.metrics.source.Source
 import org.apache.spark.shuffle.FetchFailedException
 import org.apache.spark.util.{AccumulatorV2, TaskCompletionListener, TaskFailureListener}
+import org.apache.spark.internal.Logging
 
-
-object TaskContext {
+object TaskContext extends Logging{
   /**
    * Return the currently active TaskContext. This can be called inside of
    * user functions to access contextual information about running tasks.
@@ -68,8 +68,75 @@ object TaskContext {
   private[spark] def empty(): TaskContextImpl = {
     new TaskContextImpl(0, 0, 0, 0, null, new Properties, null)
   }
-}
 
+
+  def logInputMap(): Unit = {
+    // in GeneralizedLinear alg. input.map(lp => lp.label, lp.feature)
+    this.taskContext.get().logInputMapId += 1
+    val tmp_id = this.taskContext.get().logInputMapId
+
+    if (tmp_id < 3 || tmp_id % 67300 ==0) {
+      logInfo(s"ghandCP_logInputMap=taskId:${this.taskContext.get.taskAttemptId()}" +
+        s"=partitionId:${this.taskContext.get.partitionId()}" +
+        s"=elementId:${tmp_id}=elementTime:${System.currentTimeMillis()}")
+    }
+  }
+
+  def logSampleFilter(): Unit = {
+    this.taskContext.get().logSampleFilterId += 1
+    val tmp_id = this.taskContext.get().logSampleFilterId
+    if (tmp_id < 3 || tmp_id % 60000 ==0) {
+      logInfo(s"ghandCP_logSampleFilter=taskId:${this.taskContext.get.taskAttemptId()}" +
+        s"=partitionId:${this.taskContext.get.partitionId()}" +
+        s"=elementId:${tmp_id}=elementTime:${System.currentTimeMillis()}")
+    }
+  }
+
+  def logSeqOp: Unit = {
+    this.taskContext.get().logSeqOpId += 1
+    val tmp_id = this.taskContext.get().logSeqOpId
+    if (tmp_id < 3 || tmp_id % 6000 ==0) {
+      // BE CAREFUL WITH THIS SETTING, BECAUSE when sampling with mini-batch 0.01, this can only be 673000 * 0.01
+      logInfo(s"ghandCP_logSeqOp=taskId:${this.taskContext.get.taskAttemptId()}" +
+        s"=partitionId:${this.taskContext.get.partitionId()}" +
+        s"=elementId:${tmp_id}=elementTime:${System.currentTimeMillis()}")
+    }
+
+  }
+
+  def logMapPartitionWithIndex: Unit = {
+    this.taskContext.get().logMapPartitionWithIndexId += 1
+    val tmp_id = this.taskContext.get().logMapPartitionWithIndexId
+    if (tmp_id < 3 || tmp_id % 60000 == 0) {
+      logInfo(s"ghandCP_logMapPartitionWithIndex=taskId:${this.taskContext.get.taskAttemptId()}" +
+        s"=partitionId:${this.taskContext.get.partitionId()}" +
+        s"=elementId:${tmp_id}=elementTime:${System.currentTimeMillis()}")
+    }
+
+  }
+
+  def logCombOp: Unit = {
+    this.taskContext.get().logCombOpId += 1
+    val tmp_id = this.taskContext.get().logCombOpId
+    if (tmp_id < 3 || tmp_id % 60000 == 0) {
+      logInfo(s"ghandCP_logCombOp=taskId:${this.taskContext.get.taskAttemptId()}" +
+        s"=partitionId:${this.taskContext.get.partitionId()}" +
+        s"=elementId:${tmp_id}=elementTime:${System.currentTimeMillis()}")
+    }
+
+  }
+
+  def logGetValuesRDD: Unit = {
+    this.taskContext.get().logGetValuesRDDId += 1
+    val tmp_id = this.taskContext.get().logGetValuesRDDId
+    if (tmp_id < 3 || tmp_id % 60000 == 0) {
+      logInfo(s"ghandCP_logGetValuesRDD=taskId:${this.taskContext.get.taskAttemptId()}" +
+        s"=partitionId:${this.taskContext.get.partitionId()}" +
+        s"=elementId:${tmp_id}=elementTime:${System.currentTimeMillis()}")
+    }
+
+  }
+}
 
 /**
  * Contextual information about a task which can be read or mutated during
@@ -86,6 +153,12 @@ abstract class TaskContext extends Serializable {
 
   // Note: getters in this class are defined with parentheses to maintain backward compatibility.
 
+  var logInputMapId = 0
+  var logSampleFilterId = 0
+  var logSeqOpId = 0
+  var logMapPartitionWithIndexId = 0
+  var logCombOpId = 0
+  var logGetValuesRDDId = 0
   /**
    * Returns true if the task has completed.
    */
@@ -98,7 +171,8 @@ abstract class TaskContext extends Serializable {
 
   /**
    * Returns true if the task is running locally in the driver program.
-   * @return false
+    *
+    * @return false
    */
   @deprecated("Local execution was removed, so this always returns false", "2.0.0")
   def isRunningLocally(): Boolean

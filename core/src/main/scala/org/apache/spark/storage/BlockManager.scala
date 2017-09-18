@@ -702,16 +702,17 @@ private[spark] class BlockManager(
     val local = getLocalValues(blockId)
     if (local.isDefined) {
       logInfo(s"Found block $blockId locally")
-      logInfo(s"ghandzhipengCoregetLocalblockID=${blockId}=time:${System.currentTimeMillis() - startTime}")
+      logInfo(s"ghandzhipengCore=GetBlockID:${blockId}=Time:${System.currentTimeMillis() - startTime}")
+      logInfo(s"ghandzhipengCore=LocationOfBlockID:${blockId}=ExecutorID:${this.executorId}")
       return local
     }
     val remote = getRemoteValues[T](blockId)
     if (remote.isDefined) {
       logInfo(s"Found block $blockId remotely")
-      logInfo(s"ghandzhipengCoregetRemoteblockID=${blockId}=time:${System.currentTimeMillis() - startTime}")
+      logInfo(s"ghandzhipengCore=GetBlockID:${blockId}=Time:${System.currentTimeMillis() - startTime}")
       return remote
     }
-    logInfo(s"ghandzhipengCoregetblockID=${blockId}=needsRecompute")
+    logInfo(s"ghandzhipengCore=GetBlockID:${blockId}=Time:needsRecompute")
     None
   }
 
