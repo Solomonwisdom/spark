@@ -88,7 +88,8 @@ class PairRDDFunctions[K, V](self: RDD[(K, V)])
       self.context.clean(createCombiner),
       self.context.clean(mergeValue),
       self.context.clean(mergeCombiners))
-    if (self.partitioner == Some(partitioner)) {
+    if (self.partitioner == Some(partitioner)) { // ghand: judges whether these two partitioner are the same,
+      // if so, we can avoid one shuffle. For that in mllib, we cannot avoid this.
       self.mapPartitions(iter => {
         val context = TaskContext.get()
         new InterruptibleIterator(context, aggregator.combineValuesByKey(iter, context))

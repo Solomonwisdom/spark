@@ -136,6 +136,14 @@ object TaskContext extends Logging{
     }
 
   }
+
+  // define a global variable here. Whole JVM will listen to this.
+  // Whether calculate the train loss and print it out.
+  var isDebug = false
+  def setDebug(debug: Boolean): Unit ={
+    isDebug = debug
+  }
+
 }
 
 /**

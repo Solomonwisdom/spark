@@ -1140,6 +1140,8 @@ abstract class RDD[T: ClassTag](
       val aggregatePartition =
         (it: Iterator[T]) => it.aggregate(zeroValue)(cleanSeqOp, cleanCombOp)
       var partiallyAggregated: RDD[U] = mapPartitions(it => Iterator(aggregatePartition(it)))
+      // ghand: here the vallue zeroValue is is contained in aggregatePartition(), which is a closure. ANd will
+      // be broadcast to other executors.
       var numPartitions = partiallyAggregated.partitions.length
       val scale = math.max(math.ceil(math.pow(numPartitions, 1.0 / depth)).toInt, 2)
       // If creating an extra level doesn't help reduce
@@ -1154,6 +1156,44 @@ abstract class RDD[T: ClassTag](
             iter.map{
               x =>
 //                TaskContext.logMapPartitionWithIndex
+                (i % curNumPartitions, x)
+            }
+        }.foldByKey(zeroValue, new HashPartitioner(curNumPartitions))(cleanCombOp).values
+      }
+      val copiedZeroValue = Utils.clone(zeroValue, sc.env.closureSerializer.newInstance())
+      partiallyAggregated.fold(copiedZeroValue)(cleanCombOp)
+    }
+  }
+
+  def treeAggregateWithInitialValue[U: ClassTag](seqOpInitialValue: U, zeroValue: U)(
+    seqOp: (U, T) => U,
+    combOp: (U, U) => U,
+    depth: Int = 2): U = withScope {
+    require(depth >= 1, s"Depth must be greater than or equal to 1 but got $depth.")
+    if (partitions.length == 0) {
+      Utils.clone(zeroValue, context.env.closureSerializer.newInstance())
+    } else {
+      val cleanSeqOp = context.clean(seqOp)
+      val cleanCombOp = context.clean(combOp)
+      val aggregatePartition =
+        (it: Iterator[T]) => it.aggregate(seqOpInitialValue)(cleanSeqOp, cleanCombOp)
+      var partiallyAggregated: RDD[U] = mapPartitions(it => Iterator(aggregatePartition(it)))
+      // ghand: here the vallue zeroValue is is contained in aggregatePartition(), which is a closure. ANd will
+      // be broadcast to other executors.
+      var numPartitions = partiallyAggregated.partitions.length
+      val scale = math.max(math.ceil(math.pow(numPartitions, 1.0 / depth)).toInt, 2)
+      // If creating an extra level doesn't help reduce
+      // the wall-clock time, we stop tree aggregation.
+
+      // Don't trigger TreeAggregation when it doesn't save wall-clock time
+      while (numPartitions > scale + math.ceil(numPartitions.toDouble / scale)) {
+        numPartitions /= scale
+        val curNumPartitions = numPartitions
+        partiallyAggregated = partiallyAggregated.mapPartitionsWithIndex {
+          (i, iter) =>
+            iter.map{
+              x =>
+                //                TaskContext.logMapPartitionWithIndex
                 (i % curNumPartitions, x)
             }
         }.foldByKey(zeroValue, new HashPartitioner(curNumPartitions))(cleanCombOp).values
