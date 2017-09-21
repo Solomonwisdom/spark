@@ -19,12 +19,14 @@ package org.apache.spark.mllib.optimization
 
 import scala.collection.mutable.ArrayBuffer
 
-import breeze.linalg.{norm, DenseVector => BDV}
+import breeze.linalg.{DenseVector => BDV, Vector => BV, axpy => brzAxpy, norm}
 
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.Logging
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
 import org.apache.spark.rdd.RDD
+import org.apache.spark.mllib.linalg.BLAS.{dot, axpy}
+
 
 
 /**
@@ -39,7 +41,8 @@ class GradientDescent private[spark] (private var gradient: Gradient, private va
   private var numIterations: Int = 100
   private var regParam: Double = 0.0
   private var miniBatchFraction: Double = 1.0
-  private var convergenceTol: Double = 0.001
+//  private var convergenceTol: Double = 0.001
+  private var convergenceTol: Double = 0.0 // to avoid early stop
 
   /**
    * Set the initial step size of SGD for the first step. Default 1.0.
@@ -233,18 +236,40 @@ object GradientDescent extends Logging {
     var i = 1
     while (!converged && i <= numIterations) {
       val bcWeights = data.context.broadcast(weights)
+
+      val trainLoss_start_ts = System.currentTimeMillis()
+      val train_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, bcWeights.value)))
+        .reduce((x, y) => x + y)
+      logInfo(s"ghandTrainLoss=IterationId:${i}=" +
+        s"EpochID:${i * miniBatchFraction}=" +
+        s"startLossTime:${trainLoss_start_ts}=" +
+        s"EndLossTime:${System.currentTimeMillis()}=" +
+        s"trainLoss:${(train_loss + regVal) / 4041784.0}")
+
       // Sample a subset (fraction miniBatchFraction) of the total data
       // compute and sum up the subgradients on this subset (this is one map-reduce)
-      val (gradientSum, lossSum, miniBatchSize) = data.sample(false, miniBatchFraction, 42 + i)
-        .treeAggregate((BDV.zeros[Double](n), 0.0, 0L))(
+      val (weights_reduce, lossSum, miniBatchSize, numPartitions) = data.sample(false, miniBatchFraction, 42 + i)
+        .treeAggregate((BDV.zeros[Double](n), 0.0, 0L, 0L))(
           seqOp = (c, v) => {
-            // c: (grad, loss, count), v: (label, features)
-            val l = gradient.compute(v._2, v._1, bcWeights.value, Vectors.fromBreeze(c._1))
-            (c._1, c._2 + l, c._3 + 1)
+            if (c._4 == 0){
+              c._1 += bcWeights.value.asBreeze
+            }
+            // TODO: should add regularization here -- ghand
+            // Here we directly used the computed gradient to update the weight, rather than store it.
+            val thisIterStepSize = stepSize
+            val dotProduct = dot(v._2, Vectors.fromBreeze(c._1))
+            val labelScaled = 2 * v._1 - 1.0
+            val local_loss = if (1.0 > labelScaled * dotProduct) {
+              axpy((-labelScaled) * (-thisIterStepSize), v._2, Vectors.fromBreeze(c._1))
+              1.0 - labelScaled * dotProduct
+            } else {
+              0.0
+            }
+            (c._1, c._2 + local_loss, c._3 + 1, 1L)
           },
           combOp = (c1, c2) => {
-            // c: (grad, loss, count)
-            (c1._1 += c2._1, c1._2 + c2._2, c1._3 + c2._3)
+            // c: (weight, loss, count, numPartitions)
+            (c1._1 + c2._1, c1._2 + c2._2, c1._3 + c2._3, c1._4 + c2._4)
           })
       bcWeights.destroy(blocking = false)
 
@@ -254,14 +279,15 @@ object GradientDescent extends Logging {
          * and regVal is the regularization value computed in the previous iteration as well.
          */
         stochasticLossHistory += lossSum / miniBatchSize + regVal
-        val update = updater.compute(
-          weights, Vectors.fromBreeze(gradientSum / miniBatchSize.toDouble),
-          stepSize, i, regParam)
-        weights = update._1
-        regVal = update._2
+        val weights_avg = weights_reduce / numPartitions.toDouble
+        weights = Vectors.fromBreeze(weights_avg)
+
+        val norm_value = norm(weights_avg, 2.0)
+        regVal = 0.5 * regParam * norm_value * norm_value
 
         previousWeights = currentWeights
         currentWeights = Some(weights)
+
         if (previousWeights != None && currentWeights != None) {
           converged = isConverged(previousWeights.get,
             currentWeights.get, convergenceTol)
