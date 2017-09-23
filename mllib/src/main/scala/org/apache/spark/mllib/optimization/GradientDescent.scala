@@ -244,7 +244,7 @@ object GradientDescent extends Logging {
         s"EpochID:${i * miniBatchFraction}=" +
         s"startLossTime:${trainLoss_start_ts}=" +
         s"EndLossTime:${System.currentTimeMillis()}=" +
-        s"trainLoss:${(train_loss + regVal) / 4041784.0}")
+        s"trainLoss:${train_loss / 4041784.0 + regVal}")
 
       // Sample a subset (fraction miniBatchFraction) of the total data
       // compute and sum up the subgradients on this subset (this is one map-reduce)
