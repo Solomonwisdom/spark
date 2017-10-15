@@ -307,6 +307,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
           }
         }
         else {
+          logInfo(s"ghandCP=serialzedTaskSize(Bytes,whichShouldBeLessThan128MB):${serializedTask.limit}")
           val executorData = executorDataMap(task.executorId)
           executorData.freeCores -= scheduler.CPUS_PER_TASK
 

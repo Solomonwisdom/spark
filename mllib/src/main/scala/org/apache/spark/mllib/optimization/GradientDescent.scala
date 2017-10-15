@@ -235,18 +235,6 @@ object GradientDescent extends Logging {
       logInfo(s"ghandCP=IterationId:${i}=BroadcastStartsTime:${System.currentTimeMillis()}")
       val bcWeights = data.context.broadcast(weights)
       logInfo(s"ghandCP=IterationId:${i}=BroadcastEndsTime:${System.currentTimeMillis()}")
-
-      if (TaskContext.isDebug) {
-        val trainLoss_start_ts = System.currentTimeMillis()
-        val traing_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, bcWeights.value)))
-          .reduce((x, y) => x + y)
-        logInfo(s"ghandTrainLoss=IterationId:${i}=" +
-          s"EpochID:${i * miniBatchFraction}=" +
-          s"startLossTime:${trainLoss_start_ts}=" +
-          s"EndLossTime:${System.currentTimeMillis()}=" +
-          s"trainLoss:${(traing_loss + regVal) / 4041784.0}")
-      }
-
       // Sample a subset (fraction miniBatchFraction) of the total data
       // compute and sum up the subgradients on this subset (this is one map-reduce)
       val (gradientSum, lossSum, miniBatchSize) = data.sample(false, miniBatchFraction, 42 + i)
@@ -291,6 +279,22 @@ object GradientDescent extends Logging {
             currentWeights.get, convergenceTol)
         }
         logInfo(s"ghandCP=IterationId:${i}=JudgeConvergeEndsTime:${System.currentTimeMillis()}")
+
+        if (TaskContext.isDebug) {
+          val trainLoss_start_ts = System.currentTimeMillis()
+          val train_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, weights)))
+            .reduce((x, y) => x + y)
+          logInfo(s"ghandTrainLoss=IterationId:${i}=" +
+            s"EpochID:${i * miniBatchFraction}=" +
+            s"startLossTime:${trainLoss_start_ts}=" +
+            s"EndLossTime:${System.currentTimeMillis()}=" +
+            s"trainLoss:${(train_loss) / numExamples}")
+          // this is the right way of computing regval in default MLLib
+          val breeze_weight = weights.asBreeze.toDenseVector
+          val norm_value_debug = norm(breeze_weight, 2)
+          logInfo(s"ghand=weightNorm:${norm_value_debug}")
+        }
+
 
       } else {
         logWarning(s"Iteration ($i/$numIterations). The size of sampled batch is zero")

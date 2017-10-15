@@ -64,6 +64,7 @@ private[spark] class TorrentBroadcast[T: ClassTag](obj: T, id: Long)
    * On the driver, if the value is required, it is read lazily from the block manager.
    */
   @transient private lazy val _value: T = readBroadcastBlock()
+  // lazy val means that readBroadcastBlock() is not executed unless the first time _value is accessed.
 
   /** The compression codec to use, or None if compression is disabled */
   @transient private var compressionCodec: Option[CompressionCodec] = _

@@ -24,8 +24,6 @@ import org.apache.spark.mllib.linalg.{DenseVector, Vector, Vectors}
 import org.apache.spark.rdd.RDD
 import breeze.linalg.{DenseVector => BDV, Vector => BV, axpy => brzAxpy, norm => brzNorm}
 import org.apache.spark.mllib.linalg.BLAS._
-//import jdk.nashorn.internal.ir.LiteralNode.ArrayLiteralNode.ArrayUnit
-import org.apache.spark.mllib.linalg.BLAS._
 import org.apache.spark.TaskContext
 
 
@@ -245,46 +243,56 @@ object GhandGradientDescent_breeze extends Logging {
       val bcWeights = data.context.broadcast(weights)
       logInfo(s"ghandCP=IterationId:${i}=BroadcastEndsTime:${System.currentTimeMillis()}")
 
-      // compute the training loss here.
-      if (TaskContext.isDebug) {
-        val trainLoss_start_ts = System.currentTimeMillis()
-        val traing_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, bcWeights.value)))
-          .reduce((x, y) => x + y)
-        logInfo(s"ghandTrainLoss=IterationId:${i}=" +
-          s"EpochID:${i * miniBatchFraction}=" +
-          s"startLossTime:${trainLoss_start_ts}=" +
-          s"EndLossTime:${System.currentTimeMillis()}=" +
-          s"trainLoss:${(traing_loss + regVal) / 4041784.0}")
-      }
-
       // Sample a subset (fraction miniBatchFraction) of the total data
       // compute and sum up the subgradients on this subset (this is one map-reduce)
-      val (weights_reduce, lossSum, miniBatchSize, numPartition) = data.sample(false, miniBatchFraction, 42 + i)
-          .treeAggregate(BDV.zeros[Double](n), 0.0, 0L, 0L)(
-            // zerovalue, loss, numberOfsampleused, numberOfPartition(this also help us to judge whether first seqOp
+      val (weights_reduce, lossSum, miniBatchSize, numPartition, factorForSparseL2) = data.sample(false, miniBatchFraction, 42 + i)
+          .treeAggregate(BDV.zeros[Double](n), 0.0, 0L, 0L, 1.0)(
+            // zerovalue, loss, numberOfsampleused, numberOfPartition
+            // (numberOfPartition also helps us to judge whether first seqOp
             seqOp = (c, v) => {
-            // c: (weight, loss, count_sample, count_partition), v: (label, features)
-            if (c._4 == 0){
-                c._1 += bcWeights.value.asBreeze
-            }
-              // TODO: should add regularization here. ghand
+            // c: (weight_bar, loss, count_sample, count_partition, factor), v: (label, features)
+              // weight_bar * factor is the real weight.
+              if (c._4 == 0){
+                  c._1 += bcWeights.value.asBreeze // += is overloaded
+//                c._1 = c._1 + bcWeights.value.asBreeze // this is wrong, cuz you are assign things to a val
+              }
               val thisIterStepSize = stepSize
-              val dotProduct = dot(v._2, Vectors.fromBreeze(c._1))
+              val transStepSize = thisIterStepSize / (1 - thisIterStepSize * regParam) / c._5
+              val dotProduct = dot(v._2, Vectors.fromBreeze(c._1)) * c._5
               val labelScaled = 2 * v._1 - 1.0
               val local_loss = if (1.0 > labelScaled * dotProduct) {
-                axpy((-labelScaled) * (-thisIterStepSize), v._2, Vectors.fromBreeze(c._1))
+                axpy((-labelScaled) * (-transStepSize), v._2, Vectors.fromBreeze(c._1))
                 1.0 - labelScaled * dotProduct
               } else {
                 0.0
               }
-            (c._1, c._2 + local_loss, c._3 + 1, 1L)
-          },
+              // TODO: should add regularization here. ghand
+              if (c._3 != 0 && c._3 % 5000 ==0){
+                // really update weight via L2 regularization, otherwise there will be a numeric issue.
+                // need learn_rate * regulartization <= 0.2
+                // to avoid numeric issue.
+                c._1 *= c._5 * (1 - thisIterStepSize * regParam)
+                (c._1, c._2 + local_loss, c._3 + 1, 1L, 1.0)
+              }
+              else {
+                // lazy update
+                (c._1, c._2 + local_loss, c._3 + 1, 1L, (1 - thisIterStepSize * regParam) * c._5)
+              }
+//              (c._1, c._2 + local_loss, c._3 + 1, 1L, (1 - thisIterStepSize * regParam) * c._5)
+
+            },
           combOp = (c1, c2) => {
             // user code cannot get into these function, since this function will be transfered
             // to resulthandler, they are very sensitive to user Functions. A Spark problem.
             // c: (grad, loss, count)
             // cuz this is no x = x + y in JBLAS
-            (c1._1 + c2._1, c1._2 + c2._2, c1._3 + c2._3, c1._4 + c2._4)
+            // w_bar * c_t + w_bar*c_t. c_t is not useful anymore, so it is set as 0.
+            logInfo(s"ghand=factorForSparseL2:${c1._5}:${c2._5}")
+            // avoid renew breeze objects
+            c1._1 *= c1._5
+            c1._1 += c2._1 * c2._5
+            (c1._1, c1._2 + c2._2, c1._3 + c2._3, c1._4 + c2._4, 1.0)
+            // the last part should be 1. Not zero.
           }
         )
       logInfo(s"ghandCP=IterationId:${i}=DestroyBroadcastStartsTime:${System.currentTimeMillis()}")
@@ -314,6 +322,22 @@ object GhandGradientDescent_breeze extends Logging {
             currentWeights.get, convergenceTol)
         }
         logInfo(s"ghandCP=IterationId:${i}=JudgeConvergeEndsTime:${System.currentTimeMillis()}")
+
+        // compute the training loss here.
+        if (TaskContext.isDebug) {
+          val trainLoss_start_ts = System.currentTimeMillis()
+          val train_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, weights)))
+            .reduce((x, y) => x + y)
+          logInfo(s"ghandTrainLoss=IterationId:${i}=" +
+            s"EpochID:${i * miniBatchFraction}=" +
+            s"startLossTime:${trainLoss_start_ts}=" +
+            s"EndLossTime:${System.currentTimeMillis()}=" +
+            s"trainLoss:${(train_loss) / numExamples}")
+          // this is the right way of computing regval in default MLLib
+          val breeze_weight = weights.asBreeze.toDenseVector
+          val norm_value_debug = brzNorm(breeze_weight, 2)
+          logInfo(s"ghand=weightNorm:${norm_value_debug}")
+        }
 
       } else {
         logWarning(s"Iteration ($i/$numIterations). The size of sampled batch is zero")
