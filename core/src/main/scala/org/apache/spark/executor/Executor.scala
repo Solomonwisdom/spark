@@ -468,7 +468,7 @@ private[spark] class Executor(
           s"ShuffleWriteTime:${task.metrics.shuffleWriteMetrics.writeTime}"
 
         logInfo(ghandzhipengTaskInfo)
-
+        logInfo(s"ghandCP=taskEndSendResultViaRPC=taskId:${taskId}=taskEndSendResultViaRPCTime:${System.currentTimeMillis()}")
         execBackend.statusUpdate(taskId, TaskState.FINISHED, serializedResult)
         /* Getting result time is not here. Because it is computed by DagScheduler. */
 

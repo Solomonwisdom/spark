@@ -225,18 +225,16 @@ object GhandGradientDescentShuffleB extends Logging {
     // first run: broadcast the variable to the cluster.
 
     // the first model cannot be paralleize from a big Seq, since it maybe to big for the driver.
-    val weights_final: DenseVector = repeatMLStart(data.sample(false, miniBatchFraction, 42),
+    val weights_final: DenseVector = repeatMLStart(data,
         bcWeights, numIterations, stepSize, num_features, numExamples)
 
     bcWeights.destroy() // destory the broadcast variable
 
-    if (TaskContext.isDebug) {
-      val train_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, weights_final)))
-        .reduce((x, y) => x + y)
-      val norm_value_debug = brzNorm(weights_final.asBreeze, 2)
-      logInfo(s"ghandTrainLoss=trainLoss:${(train_loss) / numExamples}=" +
+    val train_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, weights_final)))
+      .reduce((x, y) => x + y)
+    val norm_value_debug = normArray(weights_final.values)
+    logInfo(s"ghandTrainLoss=trainLoss:${(train_loss) / numExamples}=" +
         s"weightNorm:${norm_value_debug}")
-    }
 
     (weights_final, stochasticLossHistory.toArray)
   }
@@ -250,23 +248,23 @@ object GhandGradientDescentShuffleB extends Logging {
     */
   def repeatML(dataRDD: RDD[(Double, Vector)], initModelRDD: RDD[DenseVector],
                numIter: Int, stepSize: Double, numFeatures: Int, numExamples: Long): DenseVector = {
-    if (TaskContext.isDebug) {
-      val weights_tmp = initModelRDD.take(1)(0)
-      val train_loss = dataRDD.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, weights_tmp)))
-        .reduce((x, y) => x + y)
-      val norm_value_debug = brzNorm(weights_tmp.asBreeze, 2)
-      logInfo(s"ghandTrainLoss=trainLoss:${(train_loss) / numExamples}=" +
-        s"weightNorm:${norm_value_debug}")
-      initModelRDD.map{
-        dv =>
-          brzNorm(dv.asBreeze, 2)
-      }.collect().map{
-        x => logInfo(s"ghand=SB=weightNorm:${x}")
-      }
-      // you have to collect, other wise this will be optimized, i.e., it will be not executed.
-    }
 
     if (numIter > 0) {
+      if (TaskContext.isDebug) {
+        val weights_tmp = initModelRDD.take(1)(0)
+        val train_loss = dataRDD.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, weights_tmp)))
+          .reduce((x, y) => x + y)
+        val norm_value_debug = normArray(weights_tmp.values)
+        logInfo(s"ghandTrainLoss=trainLoss:${(train_loss) / numExamples}=" +
+          s"weightNorm:${norm_value_debug}")
+        initModelRDD.map{
+          dv =>
+            normArray(dv.values)
+        }.collect().map{
+          x => logInfo(s"ghand=SB=weightNorm:${x}")
+        }
+        // you have to collect, other wise this will be optimized, i.e., it will be not executed.
+      }
       // first link the two RDD via the partition Index, then perform SeqOp on each data point
       // and the corresponding model
       val models: RDD[DenseVector] = updateModel(dataRDD, initModelRDD, stepSize)
@@ -292,6 +290,42 @@ object GhandGradientDescentShuffleB extends Logging {
       // first link the two RDD via the partition Index, then perform SeqOp on each data point
       // and the corresponding model
       val models: RDD[DenseVector] = updateModelStart(dataRDD, bcWeights, stepSize)
+//      if (TaskContext.isDebug) {
+        val weights_tmp = models.take(1)(0)
+        val train_loss = dataRDD.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, weights_tmp)))
+          .reduce((x, y) => x + y)
+        val norm_value_debug = normArray(weights_tmp.values)
+        logInfo(s"ghandTrainLoss=repeatMLStart=trainLoss:${(train_loss) / numExamples}=" +
+          s"weightNorm:${norm_value_debug}")
+        models.map{
+          dv =>
+            val x = normArray(dv.values)
+            logInfo(s"ghand=SB=repeatMLStart=weightNorm1:${x}")
+            x
+        }.collect().map{
+          x => logInfo(s"ghand=SB=repeatMLStart=weightNorm1:${x}")
+
+        }
+
+//      models.map{
+//        dv =>
+//          val x = normArray(dv.values)
+//          logInfo(s"ghand=SB=repeatMLStart=weightNorm2:${x}")
+//          x
+//      }.collect().map{
+//        x => logInfo(s"ghand=SB=repeatMLStart=weightNorm2:${x}")
+//      }
+//
+//      models.map{
+//        dv =>
+//          val x = normArray(dv.values)
+//          logInfo(s"ghand=SB=repeatMLStart=weightNorm3:${x}")
+//          x
+//      }.collect().map{
+//        x => logInfo(s"ghand=SB=repeatMLStart=weightNorm3:${x}")
+//      }
+        // you have to collect, other wise this will be optimized, i.e., it will be not executed.
+//      }
       // models has numPartitions partitions, each partition with one Iterator,
       // and the Iterator has only one element, U, which is the local model.
       val avergedModels: RDD[DenseVector] = allReduce2(models, numFeatures)
@@ -360,9 +394,67 @@ object GhandGradientDescentShuffleB extends Logging {
           }
        )
     }
-    dataRDD.mapPartitions(it => Iterator(mapPartitionsFunc(it)), preservesPartitioning = false)
-    // this is not a key value, so whether preserve or not does not make any sense.
+    val models: RDD[DenseVector] = dataRDD.mapPartitions(it => Iterator(mapPartitionsFunc(it)), preservesPartitioning = false)
+    models.map{
+      dv =>
+          val x = normArray(dv.values)
+          logInfo(s"ghand=SB=insideUpdateModelStart=weightNorm1:${x}")
+          x
+    }.collect().map{
+      x => logInfo(s"ghand=SB=insideUpdateModelStart=weightNorm1:${x}")
+    }
+    models.map{
+      dv =>
+        val x = normArray(dv.values)
+        logInfo(s"ghand=SB=insideUpdateModelStart=weightNorm2:${x}")
+        x
+    }.collect().map{
+      x => logInfo(s"ghand=SB=insideUpdateModelStart=weightNorm2:${x}")
+
+    }
+    models.map{
+      dv =>
+        val x = normArray(dv.values)
+        logInfo(s"ghand=SB=insideUpdateModelStart=weightNorm3:${x}")
+        x
+    }.collect().map{
+      x => logInfo(s"ghand=SB=insideUpdateModelStart=weightNorm3:${x}")
+    }
+    models
   }
+  /**
+    * calculate the average of the elements inside each partition, and then distribute it back
+    * to all the partitions, each partition has exactly one DenseVector
+    *
+    * @return
+    */
+//  def allReduce0(models: RDD[DenseVector], numFeatures: Int): RDD[DenseVector] = {
+//    // no duplicate before shuffle, after similar process like the begining of treeAggregate(),
+//    // just duplicate the results and give them back,.
+//
+//    // if just no average, it should also work for small iterations like one.
+//    // each partition has exactly one DenseVector which is the model
+//    val numPartion = models.getNumPartitions
+//    val average_num: Int = 3
+//    val new_partition_num = (numPartion + average_num - 1) / average_num
+//    val model_with_index = models.mapPartitionsWithIndex {
+//      (i, iter) =>
+//        iter.map {
+//          x =>
+//            (i % new_partition_num, x)
+//        }
+//    }
+//    model_with_index.foldByKey(Vectors.zeros(numFeatures).toDense, new HashPartitioner(new_partition_num)) {
+//        (x, y) =>
+//          axpy(1.0, x, y)
+//          y
+//      }
+//      .map{
+//        x =>
+//          scal(average_num, x._2)
+//          x._2
+//      }
+//  }
 
   /**
     * calculate the average of the elements inside each partition, and then distribute it back
@@ -400,85 +492,129 @@ object GhandGradientDescentShuffleB extends Logging {
     // maybe even twice, since there is an index
     val numPartion = models.getNumPartitions
     logInfo(s"ghand=SB=${numPartion}")
+    models.map{
+      dv =>
+        val x = normArray(dv.values)
+        logInfo(s"ghand=SB=insideAllReduce2=weightNorm1:${x}")
+          x
+    }.collect().map{
+      x => logInfo(s"ghand=SB=insideAllReduce2=weightNorm1:${x}")
+    }
     // 1. transform each partition from one element(a DenseVector, the model) to an Iterator(double) with index
-    val doubleRDDModel: RDD[(Int, Double)] = models.mapPartitions(
-      dv_iter =>
-        dv_iter.map {
-          dv => {
-            dv.toArray.zipWithIndex.map{
-              x => (x._2, x._1)
-            }
-          }
-        }
-    ).flatMap(array => array.iterator) // this one is expensive do to GC. like 60s
-
+    // transform each dense vector into #numPartitions parts, with key from [0, numPartitions)
+    val partitionRDDModel: RDD[(Int, Array[Double])] = models.map {
+      dv => {
+//        scal(1.0 / numPartion.toDouble, dv) // scal the model first
+        logInfo(s"ghand=SB=insideAllReduce2=weightNorm2:${normArray(dv.values)}")
+          partitionDenseVector(dv.toArray, numPartion)
+      }
+    }.flatMap(array => array.iterator)
 
     // 2. shuffle by key, the number of partition should be the same with the initial modelRDD
     // concate the model, get the RDD[Double], each partition is a collection of double
-    val duplicateDoubleModel = doubleRDDModel.foldByKey(0, new HashPartitioner(numPartion)){(x, y) => x + y}
-      .map(x => (x._1, x._2 / numPartion.toDouble))
-      .mapPartitions(
-      //iter[(int, double)] => iter[...]
-      iter => iter.map{
-        // (int, double) => (key, (int, double))
-        x => {
-          // duplicate the elements for shuffling
-          val array = new Array[(Int, (Int, Double))](numPartion)
-
-          (0 to numPartion - 1).map(i => array(i) = (i, x))
-          array
+    val reducedPartitionRDDModel: RDD[(Int, Array[Double])] = partitionRDDModel
+      .reduceByKey(new HashPartitioner(numPartion), {
+          (x, y) =>
+            var i = 0
+            while(i < x.length){
+              x(i) += y(i)
+              i += 1
+            }
+            x
         }
-      }
+      )
+    logInfo(s"ghand=SB=numberOfReducePartition:${reducedPartitionRDDModel.getNumPartitions}")
+    val RDDDouble: RDD[Double] = reducedPartitionRDDModel.map (
+      x =>
+        normArray(x._2)
+
+    ).map(
+      x => x * x
     )
-    // here each element is an array, with numPartitions (partitionId, (index, value))s, all the k-v inside a partition are the same.
-    // i.e., they are used for shuffling.
+    val weightNorm: Double = RDDDouble.reduce((x, y) => x + y)
+    logInfo(s"ghand=SB=insideAllReduce2=weightNorm=afterReduceFromDifferentPartitions:${weightNorm}")
+    // why? this one should be the square of the real 2-norm.
 
-    //can use groupByKey.
-    val arrayBufferModel = duplicateDoubleModel.flatMap(array => array.iterator)
-      .aggregateByKey(new ArrayBuffer[(Int, Double)](0), new HashPartitioner(numPartion))(
-        seqOp = {
-          //(c, v) => c
-          (arrayBuffer, x) => {
-            arrayBuffer.append(x)
-            arrayBuffer
-          }
-        },
-        combOp = {
-          // (c, c) => c
-          (arrayBuffer1, arrayBuffer2) =>{
-            arrayBuffer1 ++= arrayBuffer2
-            // ++= appends a set of numbers to the arraybuffer, += appends only one element
-          }
-
-        }
-      ).values
-    // this one is like 5s.
-
-    val newModels: RDD[DenseVector] = arrayBufferModel.mapPartitions{
-      iter => iter.map{
-        //arrayBuffer[(int, double)] to denseVector
-        arraybuffer => arrayBuffer2DenseVector(arraybuffer)
+    // (Int-for shuffleKey, (Int-sequenceId-in-the-model, Array[Double]))
+    val forShuffleRDD: RDD[(Int, (Int, Array[Double]))] = reducedPartitionRDDModel.map {
+      x => {
+        // duplicate elements for shuffling
+        //x: (sliceId, sliceModel)
+        val array = new Array[(Int, (Int, Array[Double]))](numPartion)
+        (0 to numPartion - 1).map(i => array(i) = (i, x))
+        array
       }
-    }
+    }.flatMap(array => array.iterator)
 
-    // 3. transform it back to the RDD[DenseVector], return it back
-    newModels
+    // return value of groupByKey is [Key, Iterable[V]]
+    val slideModelRDD: RDD[DenseVector] = forShuffleRDD
+        .groupByKey(new HashPartitioner(numPartion)).values.mapPartitions(
+          iter => iter.map
+          {
+            x => constructDenseVector(x, numFeatures, numPartion)
+          }
+          , preservesPartitioning = true
+         )
+    slideModelRDD
   }
 
-  def arrayBuffer2DenseVector(arrayBuffer: ArrayBuffer[(Int, Double)]) : DenseVector = {
-    val array: Array[(Int, Double)] = arrayBuffer.toArray
-    val size: Int = array.size
+  def constructDenseVector(iterable: Iterable[(Int, Array[Double])], numFeatures: Int, numPartition: Int): DenseVector = {
+    val array: Array[Double] = new Array[Double](numFeatures)
+    val averge_len = numFeatures / numPartition
+    var startId = 0
+    var endId = 0
 
-    val resultArray: Array[Double] = new Array(size)
+    val iter: Iterator[(Int, Array[Double])] = iterable.iterator
 
-    var i = 0
-    while(i < size){
-      resultArray(array(i)._1) = array(i)._2
+    while(iter.hasNext){
+      val tmp = iter.next()
+      val sliceId: Int = tmp._1
+      val slice: Array[Double] = tmp._2
+      // construct the new array
+      startId = sliceId * averge_len
+      endId = slice.length
+
+      (startId to endId - 1).foreach(x => array(x) = slice(x - startId))
+
+    }
+    logInfo(s"ghand=SB=weightNormInConstructDenseVector:${normArray(array)}")
+    Vectors.dense(array).toDense
+  }
+
+  def partitionDenseVector(array: Array[Double], numPartition: Int) : Array[(Int, Array[Double])] = {
+    val len_total: Int = array.length
+    val result: Array[(Int, Array[Double])] = new Array[(Int, Array[Double])](numPartition)
+    var i: Int = 0
+    val averge_len = len_total / numPartition
+    logInfo(s"ghand=SB=InsidePartitionModel=insidePartitionDenseVectorBefore=" +
+      s"weightNorm:${normArray(array)}")
+    while(i < numPartition - 1){
+      val x: Array[Double] = array.slice(i * averge_len, i * averge_len + averge_len)
+      result(i) = (i, x)
+//      result.update(i, (i, x))
       i += 1
     }
+//    result.update(numPartition - 1, (numPartition - 1, array.slice((numPartition - 1) * averge_len, len_total)))
+    result(numPartition - 1) = (numPartition - 1, array.slice((numPartition - 1) * averge_len, len_total))
+      // examine the weight norm
+      var xxxx = 0
+      var weight_norm_xxx: Double = 0.0
+      while(xxxx < numPartition){
+        val tmp_norm = normArray(result(xxxx)._2)
+        logInfo(s"ghand=SB=partitionId:${xxxx}=partitionSize:${result(xxxx)._2.length}")
+        weight_norm_xxx += tmp_norm
+        xxxx += 1
+      }
+    logInfo(s"ghand=SB=InsidePartitionModel=insidePartitionDenseVectorAfter=" +
+      s"weightNorm:${weight_norm_xxx}")
 
-    Vectors.dense(resultArray).toDense
+    result
+  }
 
+  def normArray(array: Array[Double]): Double = {
+    var sum: Double = 0
+    array.map(x => sum += x * x)
+    sum
   }
   /**
     * Alias of `runMiniBatchSGD` with convergenceTol set to default value of 0.001.

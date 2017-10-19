@@ -98,6 +98,8 @@ private[spark] class CoarseGrainedExecutorBackend(
         val ghandDecodeTaskDescStarts = System.currentTimeMillis()
         val taskDesc = TaskDescription.decode(data.value)
         val ghandDecodeTaskDescEnds = System.currentTimeMillis()
+        logInfo(s"ghandCP=ExecutorGetTaskDesc=taskId:${taskDesc.taskId}=ExecutorGetTaskDescTime:${ghandDecodeTaskDescStarts}")
+
         logInfo(s"ghandCP=EndsDecodeTaskDescription=taskId:${taskDesc.taskId}=" +
           s"DecodeStartsTime:${ghandDecodeTaskDescStarts}=" +
           s"DecodeTaskDescEndsTime:${ghandDecodeTaskDescEnds}=" +

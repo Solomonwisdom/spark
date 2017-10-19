@@ -58,8 +58,10 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
       taskSetManager: TaskSetManager,
       tid: Long,
       serializedData: ByteBuffer): Unit = {
+
     getTaskResultExecutor.execute(new Runnable {
       override def run(): Unit = Utils.logUncaughtExceptions {
+        val get_result_start_ts = System.currentTimeMillis()
         try {
           val (result, size) = serializer.get().deserialize[TaskResult[_]](serializedData) match {
             case directResult: DirectTaskResult[_] =>
@@ -120,8 +122,12 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
             logError("Exception while getting task result", ex)
             taskSetManager.abort("Exception while getting task result: %s".format(ex))
         }
+        logInfo(s"ghandCP=driverGetResult=taskId:${tid}=" +
+          s"driverGetResultStartTime:${get_result_start_ts}=" +
+          s"driverGetResultEndTime:${System.currentTimeMillis()}")
       }
     })
+
   }
 
   def enqueueFailedTask(taskSetManager: TaskSetManager, tid: Long, taskState: TaskState,

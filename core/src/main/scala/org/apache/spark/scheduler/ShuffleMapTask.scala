@@ -90,8 +90,11 @@ private[spark] class ShuffleMapTask(
     _executorDeserializeTime = System.currentTimeMillis() - deserializeStartTime
 
     val ghandExecutorDeserialEnds = System.currentTimeMillis()
+    logInfo(s"ghandCP=taskId:${context.taskAttemptId()}=" +
+      s"getBroadcastBinaryStart:${ghandExecutorDeserialStarts}")
 
-    logInfo(s"ghandCP=taskAttemptID:${context.taskAttemptId()}=ExecutorDeserialStarts:${ghandExecutorDeserialStarts}=" +
+    logInfo(s"ghandCP=taskAttemptID:${context.taskAttemptId()}=" +
+      s"ExecutorDeserialStarts:${ghandExecutorDeserialStarts}=" +
       s"ExecutorDeserialEnds:${ghandExecutorDeserialEnds}")
 
     _executorDeserializeCpuTime = if (threadMXBean.isCurrentThreadCpuTimeSupported) {

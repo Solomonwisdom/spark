@@ -1008,6 +1008,7 @@ abstract class RDD[T: ClassTag](
     * Reduces the elements of this RDD using the specified commutative and
     * associative binary operator.
     */
+  // NOTE: The intial value is the x. Not zero!!!
   def reduce(f: (T, T) => T): T = withScope {
     val cleanF = sc.clean(f)
     val reducePartition: Iterator[T] => Option[T] = iter => {

@@ -129,6 +129,8 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
 
     override def receive: PartialFunction[Any, Unit] = {
       case StatusUpdate(executorId, taskId, state, data) =>
+        logInfo(s"ghandCP=DirverGetResultViaRPC=taskId:${taskId}=DirverGetResultViaRPCTime:${System.currentTimeMillis()}")
+
         scheduler.statusUpdate(taskId, state, data.value)
         if (TaskState.isFinished(state)) {
           executorDataMap.get(executorId) match {
@@ -294,6 +296,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
       for (task <- tasks.flatten) {
         val serializedTask = TaskDescription.encode(task)
         if (serializedTask.limit >= maxRpcMessageSize) {
+          logInfo(s"ghandCP=serializedTaskSizeIsTOOBIG")
           scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
             try {
               var msg = "Serialized task %s:%d was %d bytes, which exceeds max allowed: " +
@@ -313,7 +316,9 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
 
           logDebug(s"Launching task ${task.taskId} on executor id: ${task.executorId} hostname: " +
             s"${executorData.executorHost}.")
-          logInfo(s"ghandCP=driverLanuchTaskViaRPC=taskId:${task.taskId}=driverLanuchTime:${System.currentTimeMillis()}")
+          val ghand_send_task_desc = System.currentTimeMillis()
+          logInfo(s"ghandCP=driverSendTaskDesc=taskId:${task.taskId}=driverSendTaskDescTime:${ghand_send_task_desc}")
+          logInfo(s"ghandCP=driverLanuchTaskViaRPC=taskId:${task.taskId}=driverLanuchTime:${ghand_send_task_desc}")
           executorData.executorEndpoint.send(LaunchTask(new SerializableBuffer(serializedTask)))
         }
       }
