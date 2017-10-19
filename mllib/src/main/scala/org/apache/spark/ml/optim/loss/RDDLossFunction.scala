@@ -20,11 +20,8 @@ import scala.reflect.ClassTag
 import breeze.linalg.{DenseVector => BDV}
 import breeze.optimize.DiffFunction
 import org.apache.spark.broadcast.Broadcast
-<<<<<<< HEAD
 import org.apache.spark.internal.Logging
 import org.apache.spark.ml.feature.Instance
-=======
->>>>>>> master
 import org.apache.spark.ml.linalg.{BLAS, Vector, Vectors}
 import org.apache.spark.ml.optim.aggregator.DifferentiableLossAggregator
 import org.apache.spark.rdd.RDD
