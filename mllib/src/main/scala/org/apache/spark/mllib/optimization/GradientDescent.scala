@@ -284,14 +284,17 @@ object GradientDescent extends Logging {
           val trainLoss_start_ts = System.currentTimeMillis()
           val train_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, weights)))
             .reduce((x, y) => x + y)
+
+          val breeze_weight = weights.asBreeze.toDenseVector
+          val norm_value_debug = norm(breeze_weight, 2)
           logInfo(s"ghandTrainLoss=IterationId:${i}=" +
             s"EpochID:${i * miniBatchFraction}=" +
             s"startLossTime:${trainLoss_start_ts}=" +
             s"EndLossTime:${System.currentTimeMillis()}=" +
+            s"weightNorm:${norm_value_debug}=" +
             s"trainLoss:${(train_loss) / numExamples}")
           // this is the right way of computing regval in default MLLib
-          val breeze_weight = weights.asBreeze.toDenseVector
-          val norm_value_debug = norm(breeze_weight, 2)
+
           logInfo(s"ghand=weightNorm:${norm_value_debug}")
         }
 

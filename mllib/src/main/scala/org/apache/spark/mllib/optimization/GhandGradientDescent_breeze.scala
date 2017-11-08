@@ -252,13 +252,21 @@ object GhandGradientDescent_breeze extends Logging {
             seqOp = (c, v) => {
             // c: (weight_bar, loss, count_sample, count_partition, factor), v: (label, features)
               // weight_bar * factor is the real weight.
+              var factor = c._5
               if (c._4 == 0){
                   c._1 += bcWeights.value.asBreeze // += is overloaded
 //                c._1 = c._1 + bcWeights.value.asBreeze // this is wrong, cuz you are assign things to a val
               }
+              if (factor < 1e-5){ // to avoid numerical issue, this implementation is much better than before.
+              val startDenseUpdateModel = System.currentTimeMillis()
+                c._1 *= c._5
+                factor = 1.0
+                logInfo(s"ghand=SS=L2UpdateDenseModel:${System.currentTimeMillis() - startDenseUpdateModel}")
+              }
+
               val thisIterStepSize = stepSize
-              val transStepSize = thisIterStepSize / (1 - thisIterStepSize * regParam) / c._5
-              val dotProduct = dot(v._2, Vectors.fromBreeze(c._1)) * c._5
+              val transStepSize = thisIterStepSize / (1 - thisIterStepSize * regParam) / factor
+              val dotProduct = dot(v._2, Vectors.fromBreeze(c._1)) * factor
               val labelScaled = 2 * v._1 - 1.0
               val local_loss = if (1.0 > labelScaled * dotProduct) {
                 axpy((-labelScaled) * (-transStepSize), v._2, Vectors.fromBreeze(c._1))
@@ -266,19 +274,8 @@ object GhandGradientDescent_breeze extends Logging {
               } else {
                 0.0
               }
-              // TODO: should add regularization here. ghand
-              if (c._3 != 0 && c._3 % 5000 ==0){
-                // really update weight via L2 regularization, otherwise there will be a numeric issue.
-                // need learn_rate * regulartization <= 0.2
-                // to avoid numeric issue.
-                c._1 *= c._5 * (1 - thisIterStepSize * regParam)
-                (c._1, c._2 + local_loss, c._3 + 1, 1L, 1.0)
-              }
-              else {
-                // lazy update
-                (c._1, c._2 + local_loss, c._3 + 1, 1L, (1 - thisIterStepSize * regParam) * c._5)
-              }
-//              (c._1, c._2 + local_loss, c._3 + 1, 1L, (1 - thisIterStepSize * regParam) * c._5)
+              // lazy update
+              (c._1, c._2 + local_loss, c._3 + 1, 1L, (1 - thisIterStepSize * regParam) * factor)
 
             },
           combOp = (c1, c2) => {
@@ -328,15 +325,17 @@ object GhandGradientDescent_breeze extends Logging {
           val trainLoss_start_ts = System.currentTimeMillis()
           val train_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, weights)))
             .reduce((x, y) => x + y)
+          val breeze_weight = weights.asBreeze.toDenseVector
+          val norm_value_debug = brzNorm(breeze_weight, 2)
+
           logInfo(s"ghandTrainLoss=IterationId:${i}=" +
             s"EpochID:${i * miniBatchFraction}=" +
             s"startLossTime:${trainLoss_start_ts}=" +
             s"EndLossTime:${System.currentTimeMillis()}=" +
+            s"weightNorm:${norm_value_debug}=" +
             s"trainLoss:${(train_loss) / numExamples}")
           // this is the right way of computing regval in default MLLib
-          val breeze_weight = weights.asBreeze.toDenseVector
-          val norm_value_debug = brzNorm(breeze_weight, 2)
-          logInfo(s"ghand=weightNorm:${norm_value_debug}")
+
         }
 
       } else {
@@ -364,7 +363,7 @@ object GhandGradientDescent_breeze extends Logging {
       regParam: Double,
       miniBatchFraction: Double,
       initialWeights: Vector): (Vector, Array[Double]) =
-    GradientDescent.runMiniBatchSGD(data, gradient, updater, stepSize, numIterations,
+    GhandGradientDescent_breeze.runMiniBatchSGD(data, gradient, updater, stepSize, numIterations,
                                     regParam, miniBatchFraction, initialWeights, 0.001)
 
 

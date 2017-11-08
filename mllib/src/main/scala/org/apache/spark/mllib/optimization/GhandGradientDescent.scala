@@ -244,7 +244,7 @@ object GhandGradientDescent extends Logging {
           s"EpochID:${i * miniBatchFraction}=" +
           s"startLossTime:${trainLoss_start_ts}=" +
           s"EndLossTime:${System.currentTimeMillis()}=" +
-          s"trainLoss:${(traing_loss) / numExamples + regVal}")
+          s"trainLoss:${(traing_loss) / numExamples}")
       }
 
       // Sample a subset (fraction miniBatchFraction) of the total data

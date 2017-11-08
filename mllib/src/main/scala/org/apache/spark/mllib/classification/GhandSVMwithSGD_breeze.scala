@@ -2,7 +2,7 @@ package org.apache.spark.mllib.classification
 
 import org.apache.spark.annotation.Since
 import org.apache.spark.mllib.linalg.Vector
-import org.apache.spark.mllib.optimization.{GhandGradientDescent, GhandGradientDescent_breeze, HingeGradient, SquaredL2Updater}
+import org.apache.spark.mllib.optimization.{GhandGradientDescent_breeze, HingeGradient, SquaredL2Updater}
 import org.apache.spark.mllib.regression.{GeneralizedLinearAlgorithm, LabeledPoint}
 import org.apache.spark.mllib.util.DataValidators
 import org.apache.spark.rdd.RDD
