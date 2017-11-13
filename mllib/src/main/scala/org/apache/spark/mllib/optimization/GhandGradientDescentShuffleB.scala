@@ -233,6 +233,7 @@ object GhandGradientDescentShuffleB extends Logging {
     logInfo(s"ghandTrainLoss=weightNorm:${norm_value_debug}=" +
       s"trainLoss:${(train_loss) / numExamples}")
 
+
     (weights_final, stochasticLossHistory.toArray)
   }
 
