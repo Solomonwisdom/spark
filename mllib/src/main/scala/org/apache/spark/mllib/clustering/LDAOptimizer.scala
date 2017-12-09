@@ -22,7 +22,7 @@ import java.util.Random
 import breeze.linalg.{all, normalize, sum, DenseMatrix => BDM, DenseVector => BDV}
 import breeze.numerics.{abs, exp, trigamma}
 import breeze.stats.distributions.{Gamma, RandBasis}
-
+import org.apache.spark.TaskContext
 import org.apache.spark.annotation.{DeveloperApi, Since}
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.util.PeriodicGraphCheckpointer
@@ -271,10 +271,10 @@ final class OnlineLDAOptimizer extends LDAOptimizer with Logging {
   private var alpha: Vector = Vectors.dense(0)
 
   /** (for debugging)  Get docConcentration */
-  private[clustering] def getAlpha: Vector = alpha
+  private[clustering] def getAlpha: Vector = alpha // parameter for dirichlet prior, \theta, document-topic
 
   /** alias for topicConcentration */
-  private var eta: Double = 0
+  private var eta: Double = 0 // parameter for dirichlet prior, \beta, topic word
 
   /** (for debugging)  Get topicConcentration */
   private[clustering] def getEta: Double = eta
@@ -286,7 +286,7 @@ final class OnlineLDAOptimizer extends LDAOptimizer with Logging {
 
   // Online LDA specific parameters
   // Learning rate is: (tau0 + t)^{-kappa}
-  private var tau0: Double = 1024
+  private var tau0: Double = 1024 // view from the paper, 64 seems better. Need to tune this.
   private var kappa: Double = 0.51
   private var miniBatchFraction: Double = 0.05
   private var optimizeDocConcentration: Boolean = false
@@ -295,14 +295,15 @@ final class OnlineLDAOptimizer extends LDAOptimizer with Logging {
   private var docs: RDD[(Long, Vector)] = null
 
   /** Dirichlet parameter for the posterior over topics */
-  private var lambda: BDM[Double] = null
+  private var lambda: BDM[Double] = null // lamda is a matrix.
 
   /** (for debugging) Get parameter for topics */
   private[clustering] def getLambda: BDM[Double] = lambda
 
   /** Current iteration (count of invocations of [[next()]]) */
   private var iteration: Int = 0
-  private var gammaShape: Double = 100
+
+  private var gammaShape: Double = 100 // gamma is for \theta_d?
 
   /**
    * A (positive) learning parameter that downweights early iterations. Larger values make early
@@ -457,7 +458,7 @@ final class OnlineLDAOptimizer extends LDAOptimizer with Logging {
    */
   private[clustering] def submitMiniBatch(batch: RDD[(Long, Vector)]): OnlineLDAOptimizer = {
     iteration += 1
-    val k = this.k
+    val k = this.k // #topic
     val vocabSize = this.vocabSize
     val expElogbeta = exp(LDAUtils.dirichletExpectation(lambda)).t
     val expElogbetaBc = batch.sparkContext.broadcast(expElogbeta)
@@ -510,7 +511,7 @@ final class OnlineLDAOptimizer extends LDAOptimizer with Logging {
       return this
     }
 
-    val batchResult = statsSum *:* expElogbeta.t
+    val batchResult = statsSum *:* expElogbeta.t // stats is part of \delta \lambda -- > so it's right.
     // Note that this is an optimization to avoid batch.count
     val batchSize = (miniBatchFraction * corpusSize).ceil.toInt
     updateLambda(batchResult, batchSize)
@@ -611,20 +612,37 @@ private[clustering] object OnlineLDAOptimizer {
       case v: SparseVector => (v.indices.toList, v.values)
     }
     // Initialize the variational distribution q(theta|gamma) for the mini-batch
+    // zhipeng, "d" stands for docs.
+    // This func() deal with one doc per time. Can deal with batch ==
+
     val gammad: BDV[Double] =
       new Gamma(gammaShape, 1.0 / gammaShape).samplesVector(k)                   // K
-    val expElogthetad: BDV[Double] = exp(LDAUtils.dirichletExpectation(gammad))  // K
-    val expElogbetad = expElogbeta(ids, ::).toDenseMatrix                        // ids * K
+    // gammad is randomly intialized, shape is (k * 1)
 
-    val phiNorm: BDV[Double] = expElogbetad * expElogthetad +:+ 1e-100            // ids
+    val expElogthetad: BDV[Double] = exp(LDAUtils.dirichletExpectation(gammad))  // K
+    // get theta_d from gamma_d, this comes from variational inference.
+    // shape is k * 1
+
+    val expElogbetad = expElogbeta(ids, ::).toDenseMatrix                        // ids * K
+    // In this func(), dealing with one doc, I only need several rows of beta matrix. Which should definitely
+    // be optimized.
+    // shape is (#wordsInThisDoc * K)
+
+    val phiNorm: BDV[Double] = expElogbetad * expElogthetad +:+ 1e-100            // ids,
+    // shape is (#wordsInThisDoc * 1)
+    // why this is needed? Should be removed? --> No, this is for initialization.
+
     var meanGammaChange = 1D
     val ctsVector = new BDV[Double](cts)                                         // ids
+    // cts: word counts in this document
 
     // Iterate between gamma and phi until convergence
     while (meanGammaChange > 1e-3) {
       val lastgamma = gammad.copy
       //        K                  K * ids               ids
       gammad := (expElogthetad *:* (expElogbetad.t * (ctsVector /:/ phiNorm))) +:+ alpha
+      // elementwise assignment
+      // Why gamma d is updated like this?  Why devided by PhiNorm?
       expElogthetad := exp(LDAUtils.dirichletExpectation(gammad))
       // TODO: Keep more values in log space, and only exponentiate when needed.
       phiNorm := expElogbetad * expElogthetad +:+ 1e-100
@@ -632,6 +650,8 @@ private[clustering] object OnlineLDAOptimizer {
     }
 
     val sstatsd = expElogthetad.asDenseMatrix.t * (ctsVector /:/ phiNorm).asDenseMatrix
+    // why this is different from the alg in paper? ----- zhipeng
+    TaskContext.isDebug
     (gammad, sstatsd, ids)
   }
 }

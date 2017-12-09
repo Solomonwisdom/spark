@@ -2,7 +2,7 @@ package org.apache.spark.mllib.classification
 
 import org.apache.spark.annotation.Since
 import org.apache.spark.mllib.linalg.Vector
-import org.apache.spark.mllib.optimization.{GhandGradientDescent_breeze, HingeGradient, SquaredL2Updater}
+import org.apache.spark.mllib.optimization.{GhandSVMSGD, HingeGradient, SquaredL2Updater}
 import org.apache.spark.mllib.regression.{GeneralizedLinearAlgorithm, LabeledPoint}
 import org.apache.spark.mllib.util.DataValidators
 import org.apache.spark.rdd.RDD
@@ -14,7 +14,7 @@ import org.apache.spark.rdd.RDD
   * @note Labels used in SVM should be {0, 1}.
   */
 @Since("0.8.0")
-class GhandSVMwithSGD_breeze private (
+class GhandSVMSGDModel private (
                            private var stepSize: Double,
                            private var numIterations: Int,
                            private var regParam: Double,
@@ -24,7 +24,7 @@ class GhandSVMwithSGD_breeze private (
   private val gradient = new HingeGradient()
   private val updater = new SquaredL2Updater()
   @Since("0.8.0")
-  override val optimizer = new GhandGradientDescent_breeze(gradient, updater)
+  override val optimizer = new GhandSVMSGD(gradient, updater)
     .setStepSize(stepSize)
     .setNumIterations(numIterations)
     .setRegParam(regParam)
@@ -49,7 +49,7 @@ class GhandSVMwithSGD_breeze private (
   * @note Labels used in SVM should be {0, 1}.
   */
 @Since("0.8.0")
-object GhandSVMwithSGD_breeze {
+object GhandSVMSGDModel {
 
   /**
     * Train a SVM model given an RDD of (label, features) pairs. We run a fixed number
@@ -74,7 +74,7 @@ object GhandSVMwithSGD_breeze {
              regParam: Double,
              miniBatchFraction: Double,
              initialWeights: Vector): SVMModel = {
-    new GhandSVMwithSGD_breeze(stepSize, numIterations, regParam, miniBatchFraction)
+    new GhandSVMSGDModel(stepSize, numIterations, regParam, miniBatchFraction)
       .run(input, initialWeights)
   }
 
@@ -97,7 +97,7 @@ object GhandSVMwithSGD_breeze {
              stepSize: Double,
              regParam: Double,
              miniBatchFraction: Double): SVMModel = {
-    new GhandSVMwithSGD_breeze(stepSize, numIterations, regParam, miniBatchFraction).run(input)
+    new GhandSVMSGDModel(stepSize, numIterations, regParam, miniBatchFraction).run(input)
   }
 
   /**

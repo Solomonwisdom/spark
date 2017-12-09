@@ -34,7 +34,7 @@ import org.apache.spark.broadcast.Broadcast
   * @param updater Updater to be used to update weights after every iteration.
   */
 
-class GhandGradientDescentShuffleB private[spark] (private var gradient: Gradient, private var updater: Updater)
+class GhandSVMSGDShuffle private[spark] (private var gradient: Gradient, private var updater: Updater)
   extends Optimizer with Logging {
 
   private var stepSize: Double = 1.0
@@ -135,7 +135,7 @@ class GhandGradientDescentShuffleB private[spark] (private var gradient: Gradien
     */
   @DeveloperApi
   def optimize(data: RDD[(Double, Vector)], initialWeights: Vector): Vector = {
-    val (weights, _) = GhandGradientDescentShuffleB.runMiniBatchSGD(
+    val (weights, _) = GhandSVMSGDShuffle.runMiniBatchSGD(
       data,
       gradient,
       updater,
@@ -155,7 +155,7 @@ class GhandGradientDescentShuffleB private[spark] (private var gradient: Gradien
   * Top-level method to run gradient descent.
   */
 @DeveloperApi
-object GhandGradientDescentShuffleB extends Logging {
+object GhandSVMSGDShuffle extends Logging {
   /**
     * Run stochastic gradient descent (SGD) in parallel using mini batches.
     * In each iteration, we sample a subset (fraction miniBatchFraction) of the total data
@@ -231,8 +231,8 @@ object GhandGradientDescentShuffleB extends Logging {
       .reduce((x, y) => x + y)
     val norm_value_debug = brzNorm(weights_final.asBreeze, 2)
     logInfo(s"ghandTrainLoss=weightNorm:${norm_value_debug}=" +
-      s"trainLoss:${(train_loss) / numExamples}")
-
+//      s"trainLoss:${(train_loss) / numExamples}")
+    s"trainLoss:${(train_loss) / numExamples + 0.5 * norm_value_debug * norm_value_debug * regParam}")
 
     (weights_final, stochasticLossHistory.toArray)
   }
@@ -254,26 +254,34 @@ object GhandGradientDescentShuffleB extends Logging {
           .reduce((x, y) => x + y)
         val norm_value_debug = brzNorm(weights_tmp.asBreeze, 2)
         logInfo(s"ghandTrainLoss=weightNorm:${norm_value_debug}=" +
-          s"trainLoss:${(train_loss) / numExamples}")
+//          s"trainLoss:${(train_loss) / numExamples}")
+        s"trainLoss:${(train_loss) / numExamples + 0.5 * norm_value_debug * norm_value_debug * regParam}")
         // you have to collect, other wise this will be optimized, i.e., it will be not executed.
       }
 
-      if((numIter - 10) % 10 == 0)
-        initModelRDD.checkpoint() // to truncate the lineage graph
+//      if((numIter - 10) % 10 == 0) {
+//        initModelRDD.checkpoint() // to truncate the lineage graph
+//        logInfo(s"ghand=checkpoint=${System.currentTimeMillis()}")
+////        System.gc() // will this work to free disk?
+//      }
 
       // first zip the two RDDs, then perform SeqOp on each data point
       // and the corresponding model
       val models: RDD[DenseVector] = updateModel(dataRDD, initModelRDD, stepSize, regParam)
       // models has numPartitions partitions, each partition with one Iterator,
       // and the Iterator has only one element, U, which is the local model.
-      val avergedModels: RDD[DenseVector] = allReduce2(models, numFeatures)
+      initModelRDD.unpersist(blocking = false)
+
+      val averagedModels: RDD[DenseVector] = allReduce2(models, numFeatures)
       // here exchange the model, do something like a all-reduce, to communicate the model,
       // the result is return a RDD with numPartitions elements, each element is the parameters
       // of the model
       // BUT: all the elements may not have exactly the same value, it depends on your all-reduce.
-      repeatML(dataRDD, avergedModels, numIter - 1, stepSize, regParam, numFeatures, numExamples)
+      repeatML(dataRDD, averagedModels, numIter - 1, stepSize, regParam, numFeatures, numExamples)
     }
     else {
+      // we only have one log for this, but why are two jobs?
+      logInfo(s"ghand=take=happens=at${System.currentTimeMillis()}")
       initModelRDD.take(1)(0)
       // return the first element, which is the model
     }
@@ -288,11 +296,11 @@ object GhandGradientDescentShuffleB extends Logging {
       val models: RDD[DenseVector] = updateModelStart(dataRDD, bcWeights, stepSize, regParam)
       // models has numPartitions partitions, each partition with one Iterator,
       // and the Iterator has only one element, U, which is the local model.
-      val avergedModels: RDD[DenseVector] = allReduce2(models, numFeatures)
+      val averagedModels: RDD[DenseVector] = allReduce2(models, numFeatures)
       // here exchange the model, do something like a all-reduce, to communicate the model,
       // the result is return a RDD with numPartitions elements, each element is the parameters
       // of the model, and all the elements share exactly the same value.
-      repeatML(dataRDD, avergedModels, numIter - 1, stepSize, regParam, numFeatures, numExamples)
+      repeatML(dataRDD, averagedModels, numIter - 1, stepSize, regParam, numFeatures, numExamples)
     }
     else {
       bcWeights.value
@@ -500,6 +508,10 @@ object GhandGradientDescentShuffleB extends Logging {
       x =>
         constructDenseVector(x._2, numFeatures, numPartion)
     }
+
+    // reduce RDDs that will not be useful in the future
+    reducedSlicesModel.unpersist(blocking = false) // maybe blocking is not the one I thought
+
     newModels
   }
 
@@ -562,7 +574,7 @@ object GhandGradientDescentShuffleB extends Logging {
                        regParam: Double,
                        miniBatchFraction: Double,
                        initialWeights: Vector): (Vector, Array[Double]) =
-    GhandGradientDescentShuffleB.runMiniBatchSGD(data, gradient, updater, stepSize, numIterations,
+    GhandSVMSGDShuffle.runMiniBatchSGD(data, gradient, updater, stepSize, numIterations,
       regParam, miniBatchFraction, initialWeights, 0.001)
 
 

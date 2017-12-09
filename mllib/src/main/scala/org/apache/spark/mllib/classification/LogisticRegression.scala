@@ -250,6 +250,16 @@ object LogisticRegressionWithSGD {
   // NOTE(shivaram): We use multiple train methods instead of default arguments to support
   // Java programs.
 
+  @Since("1.0.0")
+  def train(
+             input: RDD[LabeledPoint],
+             numIterations: Int,
+             stepSize: Double,
+             regParam: Double,
+             miniBatchFraction: Double): LogisticRegressionModel = {
+    new LogisticRegressionWithSGD(stepSize, numIterations, regParam, miniBatchFraction)
+      .run(input)
+  }
   /**
    * Train a logistic regression model given an RDD of (label, features) pairs. We run a fixed
    * number of iterations of gradient descent using the specified step size. Each iteration uses
@@ -262,8 +272,7 @@ object LogisticRegressionWithSGD {
    * @param miniBatchFraction Fraction of data to be used per iteration.
    * @param initialWeights Initial set of weights to be used. Array should be equal in size to
    *        the number of features in the data.
-   *
-   * @note Labels used in Logistic Regression should be {0, 1}
+    * @note Labels used in Logistic Regression should be {0, 1}
    */
   @Since("1.0.0")
   def train(
@@ -285,8 +294,7 @@ object LogisticRegressionWithSGD {
    * @param numIterations Number of iterations of gradient descent to run.
    * @param stepSize Step size to be used for each iteration of gradient descent.
    * @param miniBatchFraction Fraction of data to be used per iteration.
-   *
-   * @note Labels used in Logistic Regression should be {0, 1}
+    * @note Labels used in Logistic Regression should be {0, 1}
    */
   @Since("1.0.0")
   def train(
@@ -307,8 +315,7 @@ object LogisticRegressionWithSGD {
    * @param stepSize Step size to be used for each iteration of Gradient Descent.
    * @param numIterations Number of iterations of gradient descent to run.
    * @return a LogisticRegressionModel which has the weights and offset from training.
-   *
-   * @note Labels used in Logistic Regression should be {0, 1}
+    * @note Labels used in Logistic Regression should be {0, 1}
    */
   @Since("1.0.0")
   def train(
@@ -326,8 +333,7 @@ object LogisticRegressionWithSGD {
    * @param input RDD of (label, array of features) pairs.
    * @param numIterations Number of iterations of gradient descent to run.
    * @return a LogisticRegressionModel which has the weights and offset from training.
-   *
-   * @note Labels used in Logistic Regression should be {0, 1}
+    * @note Labels used in Logistic Regression should be {0, 1}
    */
   @Since("1.0.0")
   def train(
@@ -336,6 +342,9 @@ object LogisticRegressionWithSGD {
     train(input, numIterations, 1.0, 1.0)
   }
 }
+
+//class LogisticRegressionWithLBFGS
+//  extends GeneralizedLinearAlgorithm[LogisticRegressionModel] with Serializable {
 
 /**
  * Train a classification model for Multinomial/Binary Logistic Regression using
@@ -351,14 +360,21 @@ object LogisticRegressionWithSGD {
  * @note Labels used in Logistic Regression should be {0, 1, ..., k - 1}
  * for k classes multi-label classification problem.
  */
-@Since("1.1.0")
-class LogisticRegressionWithLBFGS
-  extends GeneralizedLinearAlgorithm[LogisticRegressionModel] with Serializable {
-
-  this.setFeatureScaling(true)
+class LogisticRegressionWithLBFGS private[mllib] (
+                                                   private var numIterations : Int = 100,
+                                                   private var regParam : Double = 0.0,
+                                                   private var numCorrections : Int = 10
+                                                 )
+  extends GeneralizedLinearAlgorithm[LogisticRegressionModel] with Serializable{
+  //  this.setFeatureScaling(true)
+  this.setFeatureScaling(false)
 
   @Since("1.1.0")
   override val optimizer = new LBFGS(new LogisticGradient, new SquaredL2Updater)
+    .setConvergenceTol(0)
+    .setNumIterations(numIterations)
+    .setRegParam(regParam)
+    .setNumCorrections(numCorrections)
 
   override protected val validators = List(multiLabelValidator)
 
@@ -371,10 +387,10 @@ class LogisticRegressionWithLBFGS
   }
 
   /**
-   * Set the number of possible outcomes for k classes classification problem in
-   * Multinomial Logistic Regression.
-   * By default, it is binary logistic regression so k will be set to 2.
-   */
+    * Set the number of possible outcomes for k classes classification problem in
+    * Multinomial Logistic Regression.
+    * By default, it is binary logistic regression so k will be set to 2.
+    */
   @Since("1.3.0")
   def setNumClasses(numClasses: Int): this.type = {
     require(numClasses > 1)
@@ -394,39 +410,39 @@ class LogisticRegressionWithLBFGS
   }
 
   /**
-   * Run Logistic Regression with the configured parameters on an input RDD
-   * of LabeledPoint entries.
-   *
-   * If a known updater is used calls the ml implementation, to avoid
-   * applying a regularization penalty to the intercept, otherwise
-   * defaults to the mllib implementation. If more than two classes
-   * or feature scaling is disabled, always uses mllib implementation.
-   * If using ml implementation, uses ml code to generate initial weights.
-   */
+    * Run Logistic Regression with the configured parameters on an input RDD
+    * of LabeledPoint entries.
+    *
+    * If a known updater is used calls the ml implementation, to avoid
+    * applying a regularization penalty to the intercept, otherwise
+    * defaults to the mllib implementation. If more than two classes
+    * or feature scaling is disabled, always uses mllib implementation.
+    * If using ml implementation, uses ml code to generate initial weights.
+    */
   override def run(input: RDD[LabeledPoint]): LogisticRegressionModel = {
     run(input, generateInitialWeights(input), userSuppliedWeights = false)
   }
 
   /**
-   * Run Logistic Regression with the configured parameters on an input RDD
-   * of LabeledPoint entries starting from the initial weights provided.
-   *
-   * If a known updater is used calls the ml implementation, to avoid
-   * applying a regularization penalty to the intercept, otherwise
-   * defaults to the mllib implementation. If more than two classes
-   * or feature scaling is disabled, always uses mllib implementation.
-   * Uses user provided weights.
-   *
-   * In the ml LogisticRegression implementation, the number of corrections
-   * used in the LBFGS update can not be configured. So `optimizer.setNumCorrections()`
-   * will have no effect if we fall into that route.
-   */
+    * Run Logistic Regression with the configured parameters on an input RDD
+    * of LabeledPoint entries starting from the initial weights provided.
+    *
+    * If a known updater is used calls the ml implementation, to avoid
+    * applying a regularization penalty to the intercept, otherwise
+    * defaults to the mllib implementation. If more than two classes
+    * or feature scaling is disabled, always uses mllib implementation.
+    * Uses user provided weights.
+    *
+    * In the ml LogisticRegression implementation, the number of corrections
+    * used in the LBFGS update can not be configured. So `optimizer.setNumCorrections()`
+    * will have no effect if we fall into that route.
+    */
   override def run(input: RDD[LabeledPoint], initialWeights: Vector): LogisticRegressionModel = {
     run(input, initialWeights, userSuppliedWeights = true)
   }
 
   private def run(input: RDD[LabeledPoint], initialWeights: Vector, userSuppliedWeights: Boolean):
-      LogisticRegressionModel = {
+  LogisticRegressionModel = {
     // ml's Logistic regression only supports binary classification currently.
     if (numOfLinearPredictor == 1) {
       def runWithMlLogisticRegression(elasticNetParam: Double) = {
@@ -463,5 +479,17 @@ class LogisticRegressionWithLBFGS
     } else {
       super.run(input, initialWeights)
     }
+  }
+}
+
+// zhipeng
+object LogisticRegressionWithLBFGS{
+  def train(
+             input: RDD[LabeledPoint],
+             numIterations: Int = 100,
+             regParam: Double = 0.0,
+             numCorrections: Int = 100): LogisticRegressionModel = {
+    new LogisticRegressionWithLBFGS(numIterations, regParam, numCorrections)
+      .run(input)
   }
 }

@@ -90,6 +90,8 @@ class ShuffleDependency[K: ClassTag, V: ClassTag, C: ClassTag](
   val shuffleHandle: ShuffleHandle = _rdd.context.env.shuffleManager.registerShuffle(
     shuffleId, _rdd.partitions.length, this)
 
+  // ghandzhipeng... This is used to clean the unused shuffle files. is it used to aggressively
+  // delete intermediate files?
   _rdd.sparkContext.cleaner.foreach(_.registerShuffleForCleanup(this))
 }
 

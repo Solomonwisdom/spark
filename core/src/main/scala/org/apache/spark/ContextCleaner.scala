@@ -125,7 +125,10 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
     cleaningThread.setName("Spark Context Cleaner")
     cleaningThread.start()
     periodicGCService.scheduleAtFixedRate(new Runnable {
-      override def run(): Unit = System.gc()
+      override def run(): Unit = {
+        System.gc()
+        logInfo(s"ghandZhipeng=periodicClean=GCstartsAt${System.currentTimeMillis()}")
+      }
     }, periodicGCInterval, periodicGCInterval, TimeUnit.SECONDS)
   }
 
