@@ -94,8 +94,15 @@ class LinearSVC @Since("2.2.0") (
    * @group setParam
    */
   @Since("2.2.0")
-  def setMaxIter(value: Int): this.type = set(maxIter, value)
+  def setMaxIter(value: Int): this.type = {
+    ghandMaxIter = value
+    set(maxIter, value)
+  }
   setDefault(maxIter -> 100)
+
+  var ghandMaxIter: Int = 0
+  // I don't know how to control number of iteratiors. So use this one.
+  // later this should be removed.
 
   /**
    * Whether to fit an intercept term.
@@ -106,6 +113,7 @@ class LinearSVC @Since("2.2.0") (
   @Since("2.2.0")
   def setFitIntercept(value: Boolean): this.type = set(fitIntercept, value)
   setDefault(fitIntercept -> true)
+  // ghandzhiepng:intercept is "b" in y = w * x + b, when w=0, b is the average of the labels.
 
   /**
    * Set the convergence tolerance of iterations.
@@ -159,6 +167,15 @@ class LinearSVC @Since("2.2.0") (
   def setAggregationDepth(value: Int): this.type = set(aggregationDepth, value)
   setDefault(aggregationDepth -> 2)
 
+
+  var setNumClasses = 2
+  /**
+    * set number of classes, to avoid using labelSummarizer, which could be expensive.
+    * @param value
+    */
+  def setNumClasses(value: Int): Unit ={
+    setNumClasses = value
+  }
   @Since("2.2.0")
   override def copy(extra: ParamMap): LinearSVC = defaultCopy(extra)
 
@@ -174,49 +191,71 @@ class LinearSVC @Since("2.2.0") (
     instr.logParams(regParam, maxIter, fitIntercept, tol, standardization, threshold,
       aggregationDepth)
 
-    val (summarizer, labelSummarizer) = {
-      val seqOp = (c: (MultivariateOnlineSummarizer, MultiClassSummarizer),
-        instance: Instance) =>
-          (c._1.add(instance.features, instance.weight), c._2.add(instance.label, instance.weight))
+    // ghandzhipeng: this function will aggregate statistical information from each executors.
+    // each element is 8 * model_size, as a result, for kdd12 dataset, statistical information on
+    // each worker is bigger than 2 GB(55m * 8 * 8 ~ 3GB), thus it fails.
 
-      val combOp = (c1: (MultivariateOnlineSummarizer, MultiClassSummarizer),
-        c2: (MultivariateOnlineSummarizer, MultiClassSummarizer)) =>
-          (c1._1.merge(c2._1), c1._2.merge(c2._2))
+    // for dataset, we may need to remove this.
 
-      instances.treeAggregate(
-        (new MultivariateOnlineSummarizer, new MultiClassSummarizer)
-      )(seqOp, combOp, $(aggregationDepth))
-    }
+//    val (summarizer, labelSummarizer) = {
+//      val seqOp = (c: (MultivariateOnlineSummarizer, MultiClassSummarizer),
+//        instance: Instance) =>
+//          (c._1.add(instance.features, instance.weight), c._2.add(instance.label, instance.weight))
+//
+//      val combOp = (c1: (MultivariateOnlineSummarizer, MultiClassSummarizer),
+//        c2: (MultivariateOnlineSummarizer, MultiClassSummarizer)) =>
+//          (c1._1.merge(c2._1), c1._2.merge(c2._2))
+//
+//      instances.treeAggregate(
+//        (new MultivariateOnlineSummarizer, new MultiClassSummarizer)
+//      )(seqOp, combOp, $(aggregationDepth))
+//    }
+val summarizer = {
+  val seqOp = (c: MultivariateOnlineSummarizer,
+               instance: Instance) =>{
+    (c.add(instance.features, instance.weight))
+  }
 
-    val histogram = labelSummarizer.histogram
-    val numInvalid = labelSummarizer.countInvalid
+  val combOp = (c1: MultivariateOnlineSummarizer,
+                c2: MultivariateOnlineSummarizer) =>{
+    c1.merge(c2)
+  }
+
+  instances.treeAggregate(
+    (new MultivariateOnlineSummarizer)
+  )(seqOp, combOp, $(aggregationDepth))
+}
+
+//    val histogram = labelSummarizer.histogram
+//    val numInvalid = labelSummarizer.countInvalid
     val numFeatures = summarizer.mean.size
     val numFeaturesPlusIntercept = if (getFitIntercept) numFeatures + 1 else numFeatures
 
-    val numClasses = MetadataUtils.getNumClasses(dataset.schema($(labelCol))) match {
-      case Some(n: Int) =>
-        require(n >= histogram.length, s"Specified number of classes $n was " +
-          s"less than the number of unique labels ${histogram.length}.")
-        n
-      case None => histogram.length
-    }
-    require(numClasses == 2, s"LinearSVC only supports binary classification." +
-      s" $numClasses classes detected in $labelCol")
+//    val numClasses = MetadataUtils.getNumClasses(dataset.schema($(labelCol))) match {
+//      case Some(n: Int) =>
+//        require(n >= histogram.length, s"Specified number of classes $n was " +
+//          s"less than the number of unique labels ${histogram.length}.")
+//        n
+//      case None => histogram.length
+//    }
+//    require(numClasses == 2, s"LinearSVC only supports binary classification." +
+//      s" $numClasses classes detected in $labelCol")
+    val numClasses = setNumClasses
     instr.logNumClasses(numClasses)
     instr.logNumFeatures(numFeatures)
 
     val (coefficientVector, interceptVector, objectiveHistory) = {
-      if (numInvalid != 0) {
-        val msg = s"Classification labels should be in [0 to ${numClasses - 1}]. " +
-          s"Found $numInvalid invalid labels."
-        logError(msg)
-        throw new SparkException(msg)
-      }
+//      if (numInvalid != 0) {
+//        val msg = s"Classification labels should be in [0 to ${numClasses - 1}]. " +
+//          s"Found $numInvalid invalid labels."
+//        logError(msg)
+//        throw new SparkException(msg)
+//      }
 
       val featuresStd = summarizer.variance.toArray.map(math.sqrt)
       val getFeaturesStd = (j: Int) => featuresStd(j)
       val regParamL2 = $(regParam)
-      val bcFeaturesStd = instances.context.broadcast(featuresStd)
+      val bcFeaturesStd = instances.context.broadcast(featuresStd) // why do we bc the standard deviation?
       val regularization = if (regParamL2 != 0.0) {
         val shouldApply = (idx: Int) => idx >= 0 && idx < numFeatures
         Some(new L2Regularization(regParamL2, shouldApply,
@@ -230,15 +269,22 @@ class LinearSVC @Since("2.2.0") (
         $(aggregationDepth))
 
       def regParamL1Fun = (index: Int) => 0D
+      // here 10 is the time budget for LBFGS.
       val optimizer = new BreezeOWLQN[Int, BDV[Double]]($(maxIter), 10, regParamL1Fun, $(tol))
+      // initial weight is always 0.
       val initialCoefWithIntercept = Vectors.zeros(numFeaturesPlusIntercept)
 
+      // CacheDiffFunction is like a wrapper.  ghandzhipeng
       val states = optimizer.iterations(new CachedDiffFunction(costFun),
         initialCoefWithIntercept.asBreeze.toDenseVector)
 
       val scaledObjectiveHistory = mutable.ArrayBuilder.make[Double]
       var state: optimizer.State = null
-      while (states.hasNext) {
+
+      // add iterations control
+      var iter: Int = 0
+      while (states.hasNext && iter <= ghandMaxIter) {
+        iter += 1
         state = states.next()
         scaledObjectiveHistory += state.adjustedValue
       }

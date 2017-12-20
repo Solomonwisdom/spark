@@ -52,6 +52,10 @@ private[ml] class L2Regularization(
     shouldApply: Int => Boolean,
     applyFeaturesStd: Option[Int => Double]) extends DifferentiableRegularization[Vector] {
 
+  // ghandzhipeng: they always assume that the data is standardized, which means that
+  // if data is not standardized, they will penalize the model to achieve the same goal.
+  // input a model, output regularization term in the loss function
+  // and the gradient updated by regularization, i.e., only gradient from instances is not included here.
   override def calculate(coefficients: Vector): (Double, Vector) = {
     coefficients match {
       case dv: DenseVector =>
@@ -66,11 +70,14 @@ private[ml] class L2Regularization(
               // perform this reverse standardization by penalizing each component
               // differently to get effectively the same objective function when
               // the training dataset is not standardized.
+
+              // ghandzhipeng == we standardize the data by default.
               val std = getStd(j)
               if (std != 0.0) {
                 val temp = coef / (std * std)
                 sum += coef * temp
-                gradient(j) = regParam * temp
+                gradient(j) = regParam * temp // this is correct, because we are not computing the real model,
+                // assume the stored model is w', the real model is w, then w' = w * std.
               } else {
                 0.0
               }

@@ -69,6 +69,8 @@ private[ml] class RDDLossFunction[
     }.getOrElse(0.0)
     bcCoefficients.destroy(blocking = false)
     val treeAggregateEndTime = System.currentTimeMillis()
+    // here regLoss ~ 0, because the data is standardized.
+
     logInfo(s"ghand=LBFGS=logLoss=${newAgg.loss + regLoss}=" +
       s"start:${treeAggregateStartTime}=end:${treeAggregateEndTime}=" +
       s"duration:${treeAggregateEndTime - treeAggregateStartTime}")
