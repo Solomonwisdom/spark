@@ -20,12 +20,15 @@ package org.apache.spark.mllib.optimization
 import scala.collection.mutable.ArrayBuffer
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.Logging
-import org.apache.spark.mllib.linalg.{DenseVector, Vector, Vectors, SparseVector}
-import org.apache.spark.rdd.{RDD}
+import org.apache.spark.mllib.linalg.{DenseVector, SparseVector, Vector, Vectors}
+import org.apache.spark.rdd.RDD
 import breeze.linalg.{norm => brzNorm}
 import org.apache.spark.mllib.linalg.BLAS._
 import org.apache.spark.{HashPartitioner, TaskContext}
 import org.apache.spark.broadcast.Broadcast
+import org.apache.spark.mllib.WhetherDebug
+
+import scala.util.Random
 
 /**
   * Class used to solve an optimization problem using Gradient Descent.
@@ -156,6 +159,8 @@ class GhandSVMSGDShuffle private[spark] (private var gradient: Gradient, private
   */
 @DeveloperApi
 object GhandSVMSGDShuffle extends Logging {
+//  private var last_model_norm: Double = Double.MaxValue
+//  private var new_model_norm: Double = 0
   /**
     * Run stochastic gradient descent (SGD) in parallel using mini batches.
     * In each iteration, we sample a subset (fraction miniBatchFraction) of the total data
@@ -220,21 +225,12 @@ object GhandSVMSGDShuffle extends Logging {
     val num_features = initial_weights.size
     val bcWeights: Broadcast[DenseVector] = data.context.broadcast(initial_weights)
     // first run: broadcast the variable to the cluster.
-
     // the first model cannot be paralleize from a big Seq, since it maybe to big for the driver.
-    val weights_final: DenseVector = repeatMLStart(data,
-        bcWeights, numIterations, stepSize, regParam, num_features, numExamples)
+    val model: DenseVector = repeatMLStart(data, bcWeights, numIterations, stepSize, regParam, num_features, numExamples)
 
-    bcWeights.destroy() // destory the broadcast variable
+    bcWeights.destroy()
 
-    val train_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, weights_final)))
-      .reduce((x, y) => x + y)
-    val norm_value_debug = brzNorm(weights_final.asBreeze, 2)
-    logInfo(s"ghandTrainLoss=weightNorm:${norm_value_debug}=" +
-//      s"trainLoss:${(train_loss) / numExamples}")
-    s"trainLoss:${(train_loss) / numExamples + 0.5 * norm_value_debug * norm_value_debug * regParam}")
-
-    (weights_final, stochasticLossHistory.toArray)
+    (model, stochasticLossHistory.toArray)
   }
 
   /**
@@ -247,32 +243,56 @@ object GhandSVMSGDShuffle extends Logging {
   def repeatML(dataRDD: RDD[(Double, Vector)], initModelRDD: RDD[DenseVector],
                numIter: Int, stepSize: Double, regParam: Double, numFeatures: Int, numExamples: Long): DenseVector = {
 
-    if (numIter > 0) {
-      if (TaskContext.isDebug) {
-        val weights_tmp = initModelRDD.take(1)(0)
-        val train_loss = dataRDD.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, weights_tmp)))
-          .reduce((x, y) => x + y)
-        val norm_value_debug = brzNorm(weights_tmp.asBreeze, 2)
-        logInfo(s"ghandTrainLoss=weightNorm:${norm_value_debug}=" +
-//          s"trainLoss:${(train_loss) / numExamples}")
-        s"trainLoss:${(train_loss) / numExamples + 0.5 * norm_value_debug * norm_value_debug * regParam}")
-        // you have to collect, other wise this will be optimized, i.e., it will be not executed.
+    var time_cal_loss: Double = 0.0
+    if (WhetherDebug.isDebug) {
+      // do not take it back, calculate loss with data locality and return the loss.
+      val calLoss = (itd: Iterator[(Double, Vector)], itm: Iterator[DenseVector]) => {
+        val start_time = System.currentTimeMillis()
+        val localModel: DenseVector = itm.next()
+
+        val loss = itd.foldLeft((0.0))(
+          (startLoss, datapoint) =>{
+            val fea = datapoint._2
+            val label = datapoint._1
+            val tmp_loss = 1 - dot(fea, localModel) * (2 * label - 1)
+            if (tmp_loss > 0)
+              startLoss + tmp_loss
+            else
+              startLoss
+          }
+        )
+        var weight_norm: Double = 0
+        if(TaskContext.getPartitionId() == 0){
+          weight_norm = brzNorm(localModel.asBreeze, 2)
+        }
+        val end_time = System.currentTimeMillis()
+        Iterator((loss, weight_norm, (end_time - start_time) / 1000.0, 1))
       }
 
-//      if((numIter - 10) % 10 == 0) {
-//        initModelRDD.checkpoint() // to truncate the lineage graph
-//        logInfo(s"ghand=checkpoint=${System.currentTimeMillis()}")
-////        System.gc() // will this work to free disk?
-//      }
+      // loss: sumOfLoss, weightNorm, calLossTime, numOfPartition
+      val loss: (Double, Double, Double, Int) = dataRDD.zipPartitions(initModelRDD, preservesPartitioning = false)(calLoss).reduce(
+        (a, b) => {
+          (a._1 + b._1, a._2 + b._2, a._3 + b._3, a._4 + b._4)
+        }
+      )
 
-      // first zip the two RDDs, then perform SeqOp on each data point
-      // and the corresponding model
+      time_cal_loss = loss._3 / loss._4
+      logInfo(s"ghand=Iteration:${numIter}=TimeCalLoss:${time_cal_loss}")
+      logInfo(s"ghandTrainLoss=weightNorm:${loss._2}=" +
+        s"trainLoss:${(loss._1) / numExamples + 0.5 * loss._2 * loss._2 * regParam}")
+    }
+    train_end_time = System.currentTimeMillis()
+    logInfo(s"ghand=Iteration:${numIter}=TimeWithOutLoss:${(train_end_time - train_start_time) / 1000.0 - time_cal_loss}")
+    train_start_time = System.currentTimeMillis()
+
+
+    if (numIter > 0) {
+      // zip the two RDDs
       val models: RDD[DenseVector] = updateModel(dataRDD, initModelRDD, stepSize, regParam)
       // models has numPartitions partitions, each partition with one Iterator,
       // and the Iterator has only one element, U, which is the local model.
-      initModelRDD.unpersist(blocking = false)
 
-      val averagedModels: RDD[DenseVector] = allReduce2(models, numFeatures)
+      val averagedModels: RDD[DenseVector] = allReduce(models, numFeatures)
       // here exchange the model, do something like a all-reduce, to communicate the model,
       // the result is return a RDD with numPartitions elements, each element is the parameters
       // of the model
@@ -280,10 +300,7 @@ object GhandSVMSGDShuffle extends Logging {
       repeatML(dataRDD, averagedModels, numIter - 1, stepSize, regParam, numFeatures, numExamples)
     }
     else {
-      // we only have one log for this, but why are two jobs?
-      logInfo(s"ghand=take=happens=at${System.currentTimeMillis()}")
       initModelRDD.take(1)(0)
-      // return the first element, which is the model
     }
 
   }
@@ -291,12 +308,13 @@ object GhandSVMSGDShuffle extends Logging {
   def repeatMLStart(dataRDD: RDD[(Double, Vector)], bcWeights: Broadcast[DenseVector],
                     numIter: Int, stepSize: Double, regParam: Double, numFeatures: Int, numExamples: Long): DenseVector = {
     if (numIter > 0) {
+      train_start_time = System.currentTimeMillis()
       // first link the two RDD via the partition Index, then perform SeqOp on each data point
       // and the corresponding model
-      val models: RDD[DenseVector] = updateModelStart(dataRDD, bcWeights, stepSize, regParam)
+        val models: RDD[DenseVector] = updateModelStart(dataRDD, bcWeights, stepSize, regParam)
       // models has numPartitions partitions, each partition with one Iterator,
       // and the Iterator has only one element, U, which is the local model.
-      val averagedModels: RDD[DenseVector] = allReduce2(models, numFeatures)
+      val averagedModels: RDD[DenseVector] = allReduce(models, numFeatures)
       // here exchange the model, do something like a all-reduce, to communicate the model,
       // the result is return a RDD with numPartitions elements, each element is the parameters
       // of the model, and all the elements share exactly the same value.
@@ -318,6 +336,19 @@ object GhandSVMSGDShuffle extends Logging {
     val aggregateFunction =
       (itd: Iterator[(Double, Vector)], itm: Iterator[DenseVector]) => {
         val localModel: DenseVector = itm.next()
+
+//        if (TaskContext.getPartitionId() == 1 || TaskContext.getPartitionId() == 0){
+//          if (localModel.size < 10000000) {
+//            Thread.sleep(Random.nextInt(4) * 1000)
+//          }
+//          else if (localModel.size < 30000000){
+//            Thread.sleep(Random.nextInt(20) * 1000)
+//          }
+//          else if (localModel.size < 60000000){
+//            Thread.sleep(Random.nextInt(60) * 1000)
+//          }
+//        }
+
         val startPoint: (DenseVector, Double) = (localModel, 1.0) // for L2 sparseUpdate
         // when the factor c is too small, will update the model in a dense way.
         val newModel = itd.foldLeft(startPoint)(
@@ -337,7 +368,6 @@ object GhandSVMSGDShuffle extends Logging {
             val labelScaled = 2 * dataPoint._1 - 1.0
             val local_loss = if (1.0 > labelScaled * dotProduct) {
               axpy((-labelScaled) * (-transStepSize), dataPoint._2, model)
-              // What a fucking day! I keeped finding the 'minus' for five hours -- because I am not focused enough.
               1.0 - labelScaled * dotProduct
             } else {
               0
@@ -360,10 +390,21 @@ object GhandSVMSGDShuffle extends Logging {
     val mapPartitionsFunc =
       (itd: Iterator[(Double, Vector)]) => {
         // so many transformations, caused by implementation, i.e., polymorphic
-        val localModel: DenseVector = bcWeights.value.toDense.copy
+        val localModel: DenseVector = bcWeights.value.toDense.copy // if you don't copy it, then it's hogWild!
         // have to specify it as copy when debugging, because when debugging, it will cause multiple iterations
         // over the data
         // conform the result to be a iterator of model
+//        if (TaskContext.getPartitionId() == 1 || TaskContext.getPartitionId() == 0){
+//          if (localModel.size < 10000000) {
+//            Thread.sleep(Random.nextInt(4) * 1000)
+//          }
+//          else if (localModel.size < 30000000){
+//            Thread.sleep(Random.nextInt(20) * 1000)
+//          }
+//          else if (localModel.size < 60000000){
+//            Thread.sleep(Random.nextInt(60) * 1000)
+//          }
+//        }
         val startPoint: (DenseVector, Double) = (localModel, 1.0) // for L2 sparseUpdate
         // when the factor c is too small, will update the model in a dense way.
         val newModel = itd.foldLeft(startPoint)(
@@ -399,78 +440,15 @@ object GhandSVMSGDShuffle extends Logging {
 
     dataRDD.mapPartitions(it => mapPartitionsFunc(it), preservesPartitioning = false)
   }
-  /**
-    * calculate the average of the elements inside each partition, and then distribute it back
-    * to all the partitions, each partition has exactly one DenseVector
-    *
-    * @return
-    */
-//  def allReduce0(models: RDD[DenseVector], numFeatures: Int): RDD[DenseVector] = {
-//    // no duplicate before shuffle, after similar process like the begining of treeAggregate(),
-//    // just duplicate the results and give them back,.
-//
-//    // if just no average, it should also work for small iterations like one.
-//    // each partition has exactly one DenseVector which is the model
-//    val numPartion = models.getNumPartitions
-//    val average_num: Int = 3
-//    val new_partition_num = (numPartion + average_num - 1) / average_num
-//    val model_with_index = models.mapPartitionsWithIndex {
-//      (i, iter) =>
-//        iter.map {
-//          x =>
-//            (i % new_partition_num, x)
-//        }
-//    }
-//    model_with_index.foldByKey(Vectors.zeros(numFeatures).toDense, new HashPartitioner(new_partition_num)) {
-//        (x, y) =>
-//          axpy(1.0, x, y)
-//          y
-//      }
-//      .map{
-//        x =>
-//          scal(average_num, x._2)
-//          x._2
-//      }
-//  }
 
-  /**
-    * calculate the average of the elements inside each partition, and then distribute it back
-    * to all the partitions, each partition has exactly one DenseVector
-    *
-    * @return
-    */
+
   def allReduce(models: RDD[DenseVector], numFeatures: Int): RDD[DenseVector] = {
-    // if just no average, it should also work for small iterations like one.
-    // each partition has exactly one DenseVector which is the model
-    val numPartion = models.getNumPartitions
-    val model_with_index = models.mapPartitionsWithIndex {
-      (i, iter) =>
-        iter.map {
-          x =>
-            Array((i % numPartion, x), ((i + 1) % numPartion, x))
-        }
-    }
-    model_with_index.flatMap(array => array.iterator)
-      .foldByKey(Vectors.zeros(numFeatures).toDense, new HashPartitioner(numPartion)) {
-        (x, y) =>
-          axpy(1.0, x, y)
-          y
-      }
-      .map{
-        x =>
-          scal(0.5, x._2)
-          x._2
-      }
-  }
-
-  def allReduce2(models: RDD[DenseVector], numFeatures: Int): RDD[DenseVector] = {
     // implement the real reduce, shuffle 1/numPartitions part of each model, and then shuffle back
     // the total number of communication is 2 * numPartitions * model_size.
     val numPartion = models.getNumPartitions
     // transform each dense vector into #numPartitions parts, with key from [0, numPartitions)
     val slicesModel: RDD[(Int, Array[Double])] = models.map {
       dv => {
-//        scal(1.0 / numPartion.toDouble, dv) // scal the model first
         partitionDenseVector(dv.toArray, numPartion)
       }
     }.flatMap(array => array.iterator)
@@ -543,7 +521,9 @@ object GhandSVMSGDShuffle extends Logging {
       (startId to endId - 1).foreach(x => array(x) = slice(x - startId))
 
     }
-    Vectors.dense(array).toDense
+    val result = Vectors.dense(array).toDense
+
+    result
   }
 
   def partitionDenseVector(array: Array[Double], numPartition: Int) : Array[(Int, Array[Double])] = {
@@ -591,5 +571,8 @@ object GhandSVMSGDShuffle extends Logging {
 
     solutionVecDiff < convergenceTol * Math.max(brzNorm(currentBDV), 1.0)
   }
+
+  var train_start_time: Long = 0
+  var train_end_time: Long = 0
 
 }

@@ -209,7 +209,7 @@ object LogisticRegressionModel extends Loader[LogisticRegressionModel] {
  * for k classes multi-label classification problem.
  */
 @Since("0.8.0")
-class LogisticRegressionWithSGD private[mllib] (
+class LogisticRegressionWithSGD (
     private var stepSize: Double,
     private var numIterations: Int,
     private var regParam: Double,
@@ -360,7 +360,7 @@ object LogisticRegressionWithSGD {
  * @note Labels used in Logistic Regression should be {0, 1, ..., k - 1}
  * for k classes multi-label classification problem.
  */
-class LogisticRegressionWithLBFGS private[mllib] (
+class LogisticRegressionWithLBFGS(
                                                    private var numIterations : Int = 100,
                                                    private var regParam : Double = 0.0,
                                                    private var numCorrections : Int = 10
@@ -369,6 +369,10 @@ class LogisticRegressionWithLBFGS private[mllib] (
   //  this.setFeatureScaling(true)
   this.setFeatureScaling(false)
 
+  // set default values
+  def this(){
+    this(100, 0.0, 10)
+  }
   @Since("1.1.0")
   override val optimizer = new LBFGS(new LogisticGradient, new SquaredL2Updater)
     .setConvergenceTol(0)

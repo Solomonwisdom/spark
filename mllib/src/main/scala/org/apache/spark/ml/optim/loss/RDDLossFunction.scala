@@ -25,6 +25,7 @@ import org.apache.spark.ml.feature.Instance
 import org.apache.spark.ml.linalg.{BLAS, Vector, Vectors}
 import org.apache.spark.ml.optim.aggregator.DifferentiableLossAggregator
 import org.apache.spark.rdd.RDD
+import java.util.Calendar
 
 /**
  * This class computes the gradient and loss of a differentiable loss function by mapping a
@@ -69,11 +70,11 @@ private[ml] class RDDLossFunction[
     }.getOrElse(0.0)
     bcCoefficients.destroy(blocking = false)
     val treeAggregateEndTime = System.currentTimeMillis()
-    // here regLoss ~ 0, because the data is standardized.
 
-    logInfo(s"ghand=LBFGS=logLoss=${newAgg.loss + regLoss}=" +
+    logInfo(s"ghand=calulateObj(includeLineSearchAndCalculate)=" +
       s"start:${treeAggregateStartTime}=end:${treeAggregateEndTime}=" +
-      s"duration:${treeAggregateEndTime - treeAggregateStartTime}")
+      s"duration:${treeAggregateEndTime - treeAggregateStartTime}=currentTime:${Calendar.getInstance().getTime}" +
+      s"=loss=${newAgg.loss + regLoss}")
     (newAgg.loss + regLoss, gradient.asBreeze.toDenseVector)
   }
 }

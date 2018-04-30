@@ -22,6 +22,7 @@ import breeze.linalg.{norm, DenseVector => BDV}
 import org.apache.spark.TaskContext
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.Logging
+import org.apache.spark.mllib.WhetherDebug
 import org.apache.spark.mllib.linalg.BLAS._
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
 import org.apache.spark.rdd.RDD
@@ -231,45 +232,44 @@ object GradientDescent extends Logging {
 
     var converged = false // indicates whether converged based on convergenceTol
     var i = 1
+    train_start_time = System.currentTimeMillis()
     while (!converged && i <= numIterations) {
+
       logInfo(s"ghandCP=IterationId:${i}=BroadcastStartsTime:${System.currentTimeMillis()}")
       val bcWeights = data.context.broadcast(weights)
       logInfo(s"ghandCP=IterationId:${i}=BroadcastEndsTime:${System.currentTimeMillis()}")
 
+      var time_cal_loss: Double = 0.0
+      if (WhetherDebug.isDebug) {
+        val start_time = System.currentTimeMillis()
 
-      if (TaskContext.isDebug) {
-        val trainLoss_start_ts = System.currentTimeMillis()
         val train_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, bcWeights.value)))
           .reduce((x, y) => x + y)
-
         val breeze_weight = bcWeights.value.asBreeze.toDenseVector
         val norm_value_debug = norm(breeze_weight, 2)
-        logInfo(s"ghandTrainLoss=IterationId:${i}=" +
-          s"EpochID:${i * miniBatchFraction}=" +
-          s"startLossTime:${trainLoss_start_ts}=" +
-          s"EndLossTime:${System.currentTimeMillis()}=" +
-          s"weightNorm:${norm_value_debug}=" +
-          //            s"trainLoss:${(train_loss) / numExamples}")
+
+        val end_time = System.currentTimeMillis()
+
+        time_cal_loss = (end_time - start_time) / 1000.0
+        logInfo(s"ghand=Iteration:${numIterations - i}" +
+          s"=TimeCalLoss:${time_cal_loss}")
+        logInfo(s"ghandTrainLoss=weightNorm:${norm_value_debug}=" +
           s"trainLoss:${(train_loss) / numExamples + 0.5 * norm_value_debug * norm_value_debug * regParam}")
-        // this is the right way of computing regval in default MLLib
 
-        logInfo(s"ghand=weightNorm:${norm_value_debug}")
       }
+      train_end_time = System.currentTimeMillis()
+      logInfo(s"ghand=Iteration:${numIterations - i}=" +
+        s"TimeWithOutLoss:${(train_end_time - train_start_time) / 1000.0 - time_cal_loss}")
+      train_start_time = System.currentTimeMillis()
 
-      // Sample a subset (fraction miniBatchFraction) of the total data
-      // compute and sum up the subgradients on this subset (this is one map-reduce)
       val (gradientSum, lossSum, miniBatchSize) = data.sample(false, miniBatchFraction, 42 + i)
         .treeAggregate((BDV.zeros[Double](n), 0.0, 0L))(
           seqOp = (c, v) => {
-//            TaskContext.logSeqOp
             // c: (grad, loss, count), v: (label, features)
             val l = gradient.compute(v._2, v._1, bcWeights.value, Vectors.fromBreeze(c._1))
             (c._1, c._2 + l, c._3 + 1)
           },
           combOp = (c1, c2) => {
-//            TaskContext.logCombOp
-            // user code cannot get into these function, since this function will be transfered
-            // to resulthandler, they are very sensitive to user Functions. A Spark problem.
             // c: (grad, loss, count)
             (c1._1 += c2._1, c1._2 + c2._2, c1._3 + c2._3)
           }
@@ -288,7 +288,7 @@ object GradientDescent extends Logging {
         val update = updater.compute(
           weights, Vectors.fromBreeze(gradientSum / miniBatchSize.toDouble),
           stepSize, i, regParam)
-        weights = update._1
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            weights = update._1
         regVal = update._2
         logInfo(s"ghandCP=IterationId:${i}=updateWeightOnDriverEndsTime:${System.currentTimeMillis()}")
 
@@ -300,26 +300,6 @@ object GradientDescent extends Logging {
             currentWeights.get, convergenceTol)
         }
         logInfo(s"ghandCP=IterationId:${i}=JudgeConvergeEndsTime:${System.currentTimeMillis()}")
-
-//        if (TaskContext.isDebug) {
-//          val trainLoss_start_ts = System.currentTimeMillis()
-//          val train_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, weights)))
-//            .reduce((x, y) => x + y)
-//
-//          val breeze_weight = weights.asBreeze.toDenseVector
-//          val norm_value_debug = norm(breeze_weight, 2)
-//          logInfo(s"ghandTrainLoss=IterationId:${i}=" +
-//            s"EpochID:${i * miniBatchFraction}=" +
-//            s"startLossTime:${trainLoss_start_ts}=" +
-//            s"EndLossTime:${System.currentTimeMillis()}=" +
-//            s"weightNorm:${norm_value_debug}=" +
-////            s"trainLoss:${(train_loss) / numExamples}")
-//          s"trainLoss:${(train_loss) / numExamples + 0.5 * norm_value_debug * norm_value_debug * regParam}")
-//          // this is the right way of computing regval in default MLLib
-//
-//          logInfo(s"ghand=weightNorm:${norm_value_debug}")
-//        }
-
 
       } else {
         logWarning(s"Iteration ($i/$numIterations). The size of sampled batch is zero")
@@ -363,5 +343,6 @@ object GradientDescent extends Logging {
 
     solutionVecDiff < convergenceTol * Math.max(norm(currentBDV), 1.0)
   }
-
+  var train_start_time: Long = 0
+  var train_end_time: Long = 0
 }

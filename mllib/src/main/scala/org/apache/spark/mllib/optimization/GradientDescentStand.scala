@@ -18,23 +18,24 @@
 package org.apache.spark.mllib.optimization
 
 import scala.collection.mutable.ArrayBuffer
+import breeze.linalg.{norm, DenseVector => BDV}
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.Logging
-import org.apache.spark.mllib.linalg.{DenseVector, Vector, Vectors}
-import org.apache.spark.rdd.RDD
-import breeze.linalg.{DenseVector => BDV, Vector => BV, axpy => brzAxpy, norm => brzNorm}
+import org.apache.spark.ml.feature.Instance
 import org.apache.spark.mllib.WhetherDebug
 import org.apache.spark.mllib.linalg.BLAS._
+import org.apache.spark.mllib.linalg.{Vector, Vectors}
+import org.apache.spark.mllib.stat.MultivariateOnlineSummarizer
+import org.apache.spark.rdd.RDD
 
-/**
-  * this is the class for model average version for SGD
-  */
+// This class is only used for MLlib with feature scaling.
 /**
  * Class used to solve an optimization problem using Gradient Descent.
- * @param gradient Gradient function to be used.
+  *
+  * @param gradient Gradient function to be used.
  * @param updater Updater to be used to update weights after every iteration.
  */
-class GhandSVMSGD private[spark] (private var gradient: Gradient, private var updater: Updater)
+class GradientDescentStand private[spark] (private var gradient: Gradient, private var updater: Updater)
   extends Optimizer with Logging {
 
   private var stepSize: Double = 1.0
@@ -43,6 +44,12 @@ class GhandSVMSGD private[spark] (private var gradient: Gradient, private var up
   private var miniBatchFraction: Double = 1.0
 //  private var convergenceTol: Double = 0.001
   private var convergenceTol: Double = 0.0
+  private var ghandNumFeatures: Int = -1
+
+  def setGhandNumFeatures(numFeatures: Int): this.type ={
+    this.ghandNumFeatures = numFeatures
+    this
+  }
   /**
    * Set the initial step size of SGD for the first step. Default 1.0.
    * In subsequent steps, the step size will decrease with stepSize/sqrt(t)
@@ -128,13 +135,14 @@ class GhandSVMSGD private[spark] (private var gradient: Gradient, private var up
   /**
    * :: DeveloperApi ::
    * Runs gradient descent on the given training data.
-   * @param data training data
+    *
+    * @param data training data
    * @param initialWeights initial weights
    * @return solution vector
    */
   @DeveloperApi
   def optimize(data: RDD[(Double, Vector)], initialWeights: Vector): Vector = {
-    val (weights, _) = GhandSVMSGD.runMiniBatchSGD(
+    val (weights, _) = GradientDescentStand.runMiniBatchSGD(
       data,
       gradient,
       updater,
@@ -143,7 +151,8 @@ class GhandSVMSGD private[spark] (private var gradient: Gradient, private var up
       regParam,
       miniBatchFraction,
       initialWeights,
-      convergenceTol)
+      convergenceTol,
+      ghandNumFeatures)
     weights
   }
 
@@ -154,7 +163,7 @@ class GhandSVMSGD private[spark] (private var gradient: Gradient, private var up
  * Top-level method to run gradient descent.
  */
 @DeveloperApi
-object GhandSVMSGD extends Logging {
+object GradientDescentStand extends Logging {
   /**
    * Run stochastic gradient descent (SGD) in parallel using mini batches.
    * In each iteration, we sample a subset (fraction miniBatchFraction) of the total data
@@ -189,7 +198,8 @@ object GhandSVMSGD extends Logging {
       regParam: Double,
       miniBatchFraction: Double,
       initialWeights: Vector,
-      convergenceTol: Double): (Vector, Array[Double]) = {
+      convergenceTol: Double,
+      ghandNumFeatures: Int): (Vector, Array[Double]) = {
 
     // convergenceTol should be set with non minibatch settings
     if (miniBatchFraction < 1.0 && convergenceTol > 0.0) {
@@ -212,13 +222,39 @@ object GhandSVMSGD extends Logging {
 
     // if no data, return initial weights to avoid NaNs
     if (numExamples == 0) {
-      logWarning("GradientDescent.runMiniBatchSGD returning initial weights, no data found")
+      logWarning("GradientDescentStand.runMiniBatchSGD returning initial weights, no data found")
       return (initialWeights, stochasticLossHistory.toArray)
     }
 
     if (numExamples * miniBatchFraction < 1) {
       logWarning("The miniBatchFraction is too small")
     }
+
+    // ghand: add ways to pre-process the data to calculate the variance.
+    val instances: RDD[Instance] = data.map(
+      x=>
+        Instance(x._1, 1, x._2.asML)
+    )
+
+    val summarizer = {
+      val seqOp = (c: MultivariateOnlineSummarizer,
+                   instance: Instance) =>{
+        c.add(Vectors.fromML(instance.features), instance.weight)
+      }
+
+      val combOp = (c1: MultivariateOnlineSummarizer,
+                    c2: MultivariateOnlineSummarizer) =>{
+        c1.merge(c2)
+      }
+
+      instances.treeAggregate(
+        (new MultivariateOnlineSummarizer)
+      )(seqOp, combOp, 3)
+    }
+
+    val featuresStd: Array[Double] = summarizer.variance.toArray.map(math.sqrt)
+//    val featuresStd: Array[Double] = Array.fill(ghandNumFeatures)(1.0)
+
 
     // Initialize weights as a column vector
     var weights = Vectors.dense(initialWeights.toArray)
@@ -233,90 +269,89 @@ object GhandSVMSGD extends Logging {
 
     var converged = false // indicates whether converged based on convergenceTol
     var i = 1
+    train_start_time = System.currentTimeMillis()
     while (!converged && i <= numIterations) {
+
       logInfo(s"ghandCP=IterationId:${i}=BroadcastStartsTime:${System.currentTimeMillis()}")
       val bcWeights = data.context.broadcast(weights)
       logInfo(s"ghandCP=IterationId:${i}=BroadcastEndsTime:${System.currentTimeMillis()}")
 
+      var time_cal_loss: Double = 0.0
       if (WhetherDebug.isDebug) {
-        val trainLoss_start_ts = System.currentTimeMillis()
-        val traing_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, bcWeights.value)))
+        val start_time = System.currentTimeMillis()
+
+        val train_loss = data.map(x => math.max(0, 1.0 - (2.0 * x._1 - 1.0) * dot(x._2, bcWeights.value)))
           .reduce((x, y) => x + y)
-        val norm_value_debug = brzNorm(bcWeights.value.asBreeze)
-        logInfo(s"ghandTrainLoss=IterationId:${i}=" +
-          s"EpochID:${i * miniBatchFraction}=" +
-          s"startLossTime:${trainLoss_start_ts}=" +
-          s"EndLossTime:${System.currentTimeMillis()}=" +
-          s"trainLoss:${(traing_loss) / numExamples + 0.5 * norm_value_debug * norm_value_debug * regParam}")
+        val breeze_weight = bcWeights.value.asBreeze.toDenseVector
+        val norm_value_debug = norm(breeze_weight, 2)
+
+        val end_time = System.currentTimeMillis()
+
+        time_cal_loss = (end_time - start_time) / 1000.0
+        logInfo(s"ghand=Iteration:${numIterations - i}" +
+          s"=TimeCalLoss:${time_cal_loss}")
+        logInfo(s"ghandTrainLoss=weightNorm:${norm_value_debug}=" +
+          s"trainLoss:${(train_loss) / numExamples + 0.5 * norm_value_debug * norm_value_debug * regParam}")
+
       }
+      train_end_time = System.currentTimeMillis()
+      logInfo(s"ghand=Iteration:${numIterations - i}=" +
+        s"TimeWithOutLoss:${(train_end_time - train_start_time) / 1000.0 - time_cal_loss}")
+      train_start_time = System.currentTimeMillis()
 
-      val (weights_reduce, lossSum, miniBatchSize, numPartition, factorForSparseL2) = data.sample(false,
-        miniBatchFraction, 42 + i).treeAggregate(BDV.zeros[Double](n), 0.0, 0L, 0L, 1.0)(
-          // zerovalue, loss, numberOfsampleused, numberOfPartition
-          // (numberOfPartition also helps us to judge whether first seqOp
+      val (gradientSum, lossSum, miniBatchSize) = data.sample(false, miniBatchFraction, 42 + i)
+        .treeAggregate((BDV.zeros[Double](n), 0.0, 0L))(
           seqOp = (c, v) => {
-            // c: (weight_bar, loss, count_sample, count_partition, factor), v: (label, features)
-            // weight_bar * factor is the real weight.
-            var factor = c._5
-            if (c._4 == 0){
-              c._1 += bcWeights.value.asBreeze // += is overloaded
-              // c._1 = c._1 + bcWeights.value.asBreeze // this is wrong, cuz you are assign things to a val
-            }
-            if (factor < 1e-5){ // to avoid numerical issue, this implementation is much better than before.
-              c._1 *= c._5
-              factor = 1.0
-            }
-
-            val thisIterStepSize = stepSize
-            val transStepSize = thisIterStepSize / (1 - thisIterStepSize * regParam) / factor
-            val dotProduct = dot(v._2, Vectors.fromBreeze(c._1)) * factor
-            val labelScaled = 2 * v._1 - 1.0
-            val local_loss = if (1.0 > labelScaled * dotProduct) {
-              axpy((-labelScaled) * (-transStepSize), v._2, Vectors.fromBreeze(c._1))
-              1.0 - labelScaled * dotProduct
-            } else {
-              0.0
-            }
-            // lazy update
-            (c._1, c._2 + local_loss, c._3 + 1, 1L, (1 - thisIterStepSize * regParam) * factor)
-
+            // c: (grad, loss, count), v: (label, features)
+            val l = gradient.compute(v._2, v._1, bcWeights.value, Vectors.fromBreeze(c._1))
+            (c._1, c._2 + l, c._3 + 1)
           },
           combOp = (c1, c2) => {
-            // user code cannot get into these function, since this function will be transfered
-            // to resulthandler, they are very sensitive to user Functions. A Spark problem.
             // c: (grad, loss, count)
-            // cuz this is no x = x + y in JBLAS
-            // w_bar * c_t + w_bar*c_t. c_t is not useful anymore, so it is set as 0.
-            // avoid renew breeze objects
-            c1._1 *= c1._5
-            c1._1 += c2._1 * c2._5
-            (c1._1, c1._2 + c2._2, c1._3 + c2._3, c1._4 + c2._4, 1.0)
-            // the last part should be 1. Not zero.
+            (c1._1 += c2._1, c1._2 + c2._2, c1._3 + c2._3)
           }
         )
-
       logInfo(s"ghandCP=IterationId:${i}=DestroyBroadcastStartsTime:${System.currentTimeMillis()}")
       bcWeights.destroy(blocking = false)
       logInfo(s"ghandCP=IterationId:${i}=DestroyBroadcastEndsTime:${System.currentTimeMillis()}")
 
       if (miniBatchSize > 0) {
         /**
-          * lossSum is computed using the weights from the previous iteration
-          * and regVal is the regularization value computed in the previous iteration as well.
-          */
+         * lossSum is computed using the weights from the previous iteration
+         * and regVal is the regularization value computed in the previous iteration as well.
+         */
         stochasticLossHistory += lossSum / miniBatchSize + regVal
+        logInfo(s"ghandCP=IterationId:${i}=updateWeightOnDriverStartsTime:${System.currentTimeMillis()}")
 
-        val weights_avg = weights_reduce / numPartition.toDouble
-        weights = Vectors.fromBreeze(weights_avg)
-        // this is very important, if not update, the weights will always be zero.
+        //--------------------------------------------------------------------//
+        // here we use the gradient to update the model.
+        // We assume the L2 regularization is zero. For L2 that is not zero, we never use feature scaling.
+//        val update = updater.compute(
+//          weights, Vectors.fromBreeze(gradientSum / miniBatchSize.toDouble),
+//          stepSize, i, regParam)
 
-        val norm_value = brzNorm(weights_avg, 2.0)
-        regVal = 0.5 * regParam * norm_value * norm_value
+        // weight = weight - stepsize * gradientsum / miniBatchSize.toDouble / featureStd
+        val weights_array: Array[Double] = weights.toArray
+        val gradient_array: Array[Double] = gradientSum.toDenseVector.toArray
+        val feature_dim = featuresStd.size
+        var k = 0
+        while(k < feature_dim) {
+          if(featuresStd(k) != 0) {
+            val tmp_grad = gradient_array(k) / miniBatchSize.toDouble + weights_array(k) * regParam
+            weights_array(k) -= stepSize * tmp_grad / (featuresStd(k) * featuresStd(k))
+          }
+          k += 1
+        }
+        //--------------------------------------------------------------------//
+
+        weights = Vectors.dense(weights_array)
+        regVal = 0
+
+        logInfo(s"ghandCP=IterationId:${i}=updateWeightOnDriverEndsTime:${System.currentTimeMillis()}")
 
         logInfo(s"ghandCP=IterationId:${i}=JudgeConvergeStartsTime:${System.currentTimeMillis()}")
         previousWeights = currentWeights
-        currentWeights = Some(Vectors.fromBreeze(weights_avg))
-
+        currentWeights = Some(weights)
         if (previousWeights != None && currentWeights != None) {
           converged = isConverged(previousWeights.get,
             currentWeights.get, convergenceTol)
@@ -329,7 +364,7 @@ object GhandSVMSGD extends Logging {
       i += 1
     }
 
-    logInfo("GradientDescent.runMiniBatchSGD finished. Last 10 stochastic losses %s".format(
+    logInfo("GradientDescentStand.runMiniBatchSGD finished. Last 10 stochastic losses %s".format(
       stochasticLossHistory.takeRight(10).mkString(", ")))
 
     (weights, stochasticLossHistory.toArray)
@@ -348,8 +383,8 @@ object GhandSVMSGD extends Logging {
       regParam: Double,
       miniBatchFraction: Double,
       initialWeights: Vector): (Vector, Array[Double]) =
-    GhandSVMSGD.runMiniBatchSGD(data, gradient, updater, stepSize, numIterations,
-                                    regParam, miniBatchFraction, initialWeights, 0.001)
+    GradientDescentStand.runMiniBatchSGD(data, gradient, updater, stepSize, numIterations,
+                                    regParam, miniBatchFraction, initialWeights, 0.001, -1)
 
 
   private def isConverged(
@@ -361,9 +396,10 @@ object GhandSVMSGD extends Logging {
     val currentBDV = currentWeights.asBreeze.toDenseVector
 
     // This represents the difference of updated weights in the iteration.
-    val solutionVecDiff: Double = brzNorm(previousBDV - currentBDV)
+    val solutionVecDiff: Double = norm(previousBDV - currentBDV)
 
-    solutionVecDiff < convergenceTol * Math.max(brzNorm(currentBDV), 1.0)
+    solutionVecDiff < convergenceTol * Math.max(norm(currentBDV), 1.0)
   }
-
+  var train_start_time: Long = 0
+  var train_end_time: Long = 0
 }
