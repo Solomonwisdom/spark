@@ -19,7 +19,6 @@ package org.apache.spark.mllib.optimization
 
 import scala.collection.mutable.ArrayBuffer
 import breeze.linalg.{norm, DenseVector => BDV}
-import org.apache.spark.TaskContext
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.Logging
 import org.apache.spark.mllib.WhetherDebug
