@@ -18,26 +18,27 @@
 package org.apache.spark.ml.classification
 
 
-import scala.collection.mutable
 import breeze.linalg.{DenseVector => BDV}
 import breeze.optimize.{CachedDiffFunction, OWLQN => BreezeOWLQN}
 import org.apache.hadoop.fs.Path
-import org.apache.spark.SparkException
 import org.apache.spark.annotation.{Experimental, Since}
 import org.apache.spark.internal.Logging
 import org.apache.spark.ml.feature.Instance
 import org.apache.spark.ml.linalg._
-import org.apache.spark.mllib.linalg.{Vector=> OldVector, Vectors => OldVectors}
 import org.apache.spark.ml.optim.aggregator.HingeAggregator
 import org.apache.spark.ml.optim.loss.{L2Regularization, RDDLossFunction}
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.util._
 import org.apache.spark.mllib.linalg.VectorImplicits._
+import org.apache.spark.mllib.linalg.{Vector => OldVector, Vectors => OldVectors}
 import org.apache.spark.mllib.stat.MultivariateOnlineSummarizer
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{Dataset, Row}
 import org.apache.spark.sql.functions.{col, lit}
+import org.apache.spark.sql.{Dataset, Row}
+import org.apache.spark.{SparkEnv, SparkException}
+
+import scala.collection.mutable
 
 /** Params for linear SVM Classifier. */
 private[classification] trait LinearSVCParams extends ClassifierParams with HasRegParam
@@ -45,144 +46,131 @@ private[classification] trait LinearSVCParams extends ClassifierParams with HasR
   with HasAggregationDepth with HasThreshold {
 
   /**
-   * Param for threshold in binary classification prediction.
-   * For LinearSVC, this threshold is applied to the rawPrediction, rather than a probability.
-   * This threshold can be any real number, where Inf will make all predictions 0.0
-   * and -Inf will make all predictions 1.0.
-   * Default: 0.0
-   *
-   * @group param
-   */
+    * Param for threshold in binary classification prediction.
+    * For LinearSVC, this threshold is applied to the rawPrediction, rather than a probability.
+    * This threshold can be any real number, where Inf will make all predictions 0.0
+    * and -Inf will make all predictions 1.0.
+    * Default: 0.0
+    *
+    * @group param
+    */
   final override val threshold: DoubleParam = new DoubleParam(this, "threshold",
     "threshold in binary classification prediction applied to rawPrediction")
 }
 
 /**
- * :: Experimental ::
- *
- * <a href = "https://en.wikipedia.org/wiki/Support_vector_machine#Linear_SVM">
- *   Linear SVM Classifier</a>
- *
- * This binary classifier optimizes the Hinge Loss using the OWLQN optimizer.
- * Only supports L2 regularization currently.
- *
- */
+  * :: Experimental ::
+  *
+  * <a href = "https://en.wikipedia.org/wiki/Support_vector_machine#Linear_SVM">
+  * Linear SVM Classifier</a>
+  *
+  * This binary classifier optimizes the Hinge Loss using the OWLQN optimizer.
+  * Only supports L2 regularization currently.
+  *
+  */
 @Since("2.2.0")
 @Experimental
-class LinearSVC @Since("2.2.0") (
-    @Since("2.2.0") override val uid: String)
+class LinearSVC @Since("2.2.0")(
+                                 @Since("2.2.0") override val uid: String)
   extends Classifier[Vector, LinearSVC, LinearSVCModel]
-  with LinearSVCParams with DefaultParamsWritable {
+    with LinearSVCParams with DefaultParamsWritable {
 
   @Since("2.2.0")
   def this() = this(Identifiable.randomUID("linearsvc"))
 
 
   /**
-   * Set the regularization parameter.
-   * Default is 0.0.
-   *
-   * @group setParam
-   */
+    * Set the regularization parameter.
+    * Default is 0.0.
+    *
+    * @group setParam
+    */
   @Since("2.2.0")
   def setRegParam(value: Double): this.type = set(regParam, value)
+
   setDefault(regParam -> 0.0)
 
   /**
-   * Set the maximum number of iterations.
-   * Default is 100.
-   *
-   * @group setParam
-   */
+    * Set the maximum number of iterations.
+    * Default is 100.
+    *
+    * @group setParam
+    */
   @Since("2.2.0")
   def setMaxIter(value: Int): this.type = set(maxIter, value)
+
   setDefault(maxIter -> 100)
 
   /**
-   * Whether to fit an intercept term.
-   * Default is true.
-   *
-   * @group setParam
-   */
+    * Whether to fit an intercept term.
+    * Default is true.
+    *
+    * @group setParam
+    */
   @Since("2.2.0")
   def setFitIntercept(value: Boolean): this.type = set(fitIntercept, value)
+
   setDefault(fitIntercept -> true)
 
   /**
-   * Set the convergence tolerance of iterations.
-   * Smaller values will lead to higher accuracy at the cost of more iterations.
-   * Default is 1E-6.
-   *
-   * @group setParam
-   */
+    * Set the convergence tolerance of iterations.
+    * Smaller values will lead to higher accuracy at the cost of more iterations.
+    * Default is 1E-6.
+    *
+    * @group setParam
+    */
   @Since("2.2.0")
   def setTol(value: Double): this.type = set(tol, value)
+
   setDefault(tol -> 1E-6)
 
   /**
-   * Whether to standardize the training features before fitting the model.
-   * Default is true.
-   *
-   * @group setParam
-   */
+    * Whether to standardize the training features before fitting the model.
+    * Default is true.
+    *
+    * @group setParam
+    */
   @Since("2.2.0")
   def setStandardization(value: Boolean): this.type = set(standardization, value)
+
   setDefault(standardization -> true)
 
   /**
-   * Set the value of param [[weightCol]].
-   * If this is not set or empty, we treat all instance weights as 1.0.
-   * Default is not set, so all instances have weight one.
-   *
-   * @group setParam
-   */
+    * Set the value of param [[weightCol]].
+    * If this is not set or empty, we treat all instance weights as 1.0.
+    * Default is not set, so all instances have weight one.
+    *
+    * @group setParam
+    */
   @Since("2.2.0")
   def setWeightCol(value: String): this.type = set(weightCol, value)
 
   /**
-   * Set threshold in binary classification.
-   *
-   * @group setParam
-   */
+    * Set threshold in binary classification.
+    *
+    * @group setParam
+    */
   @Since("2.2.0")
   def setThreshold(value: Double): this.type = set(threshold, value)
+
   setDefault(threshold -> 0.0)
 
   /**
-   * Suggested depth for treeAggregate (greater than or equal to 2).
-   * If the dimensions of features or the number of partitions are large,
-   * this param could be adjusted to a larger size.
-   * Default is 2.
-   *
-   * @group expertSetParam
-   */
+    * Suggested depth for treeAggregate (greater than or equal to 2).
+    * If the dimensions of features or the number of partitions are large,
+    * this param could be adjusted to a larger size.
+    * Default is 2.
+    *
+    * @group expertSetParam
+    */
   @Since("2.2.0")
   def setAggregationDepth(value: Int): this.type = set(aggregationDepth, value)
+
   setDefault(aggregationDepth -> 2)
-
-  var numClassesVal = 2
-  /**
-    * zhipeng
-    * set number of classes, to avoid using labelSummarizer, which could be expensive.
-    * @param value
-    */
-  def setNumClasses(value: Int): Unit ={
-    numClassesVal = value
-  }
-
-  var numFeaturesVal = -1
-
-  /**
-    * zhipeng
-    * @param value, this has to be set, otherwise they cannot handle big
-    *             model. So here we assume it is known.
-    */
-  def setNumFeatures(value: Int): Unit = {
-    numFeaturesVal = value
-  }
 
 
   var initialModel: Array[Double] = null
+
   def setInitialModel(initModel: Array[Double]): Unit = {
     initialModel = initModel
   }
@@ -191,41 +179,41 @@ class LinearSVC @Since("2.2.0") (
     * get initial model with size numFeatures. Here for comparision with SGD, we
     * set intercept to be false by default.
     * ZHIPENG == If this is some bug, please make sure that you check this.
+    *
     * @param numFeatures
     * @return
     */
-  def getInitialModel(numFeatures: Int, featureStd: Array[Double]): OldVector= {
-    require(numFeatures == numFeaturesVal)
-    if (initialModel == null){
-      // models not initialized, return all-zero vectors
+  def getInitialModel(numFeatures: Int, featureStd: Array[Double]): OldVector = {
+    if (initialModel == null) {
       OldVectors.zeros(numFeatures)
     }
-    else{
+    else {
       if (initialModel.size == numFeatures) {
         // model already initialized, and whether plus intercept is the same
         // be careful here! Since by default we set standization to be false, so the weight has to be:
         // weight = weight * std
         require(initialModel.size == featureStd.size)
-        for(i <- 0 to initialModel.size - 1){
+        for (i <- 0 to initialModel.size - 1) {
           initialModel(i) = initialModel(i) * featureStd(i)
         }
         OldVectors.dense(initialModel)
       }
       else {
-        logError(s"ghand=you should not add intercept here. By default, we don't use intercept.")
-        null
+        throw new IllegalArgumentException("ghand: the dimension of initial model should be the same as number of features. Special" +
+          "cases should be considered like fitIntercept or not. By default, we don't use intersecpt.")
       }
     }
 
   }
 
   var ghandbudget: Int = 10
+
   /**
     * zhipeng
     *
     * @param value set budget, i.e., how many history data do you want.
     */
-  def SetBudget(value: Int): Unit ={
+  def SetBudget(value: Int): Unit = {
     ghandbudget = value
   }
 
@@ -250,31 +238,39 @@ class LinearSVC @Since("2.2.0") (
 
     val summarizer = {
       val seqOp = (c: MultivariateOnlineSummarizer,
-                   instance: Instance) =>{
+                   instance: Instance) => {
         (c.add(instance.features, instance.weight))
       }
-
       val combOp = (c1: MultivariateOnlineSummarizer,
-                    c2: MultivariateOnlineSummarizer) =>{
+                    c2: MultivariateOnlineSummarizer) => {
         c1.merge(c2)
       }
-
       instances.treeAggregate(
         (new MultivariateOnlineSummarizer)
       )(seqOp, combOp, 3)
     }
 
-    val numFeatures = numFeaturesVal
+    val numFeatures = SparkEnv.get.conf.get("spark.ml.numFeature", "-1").toInt
+    if (numFeatures == -1) {
+      throw new IllegalArgumentException("ghand: please set -spark.ml.numFeature- for LinearSVC class.")
+    }
     val numFeaturesPlusIntercept = if (getFitIntercept) numFeatures + 1 else numFeatures
+    val numClasses = SparkEnv.get.conf.get("spark.ml.numClasses", "2").toInt
+    logInfo(s"ghand=We assume binary classification")
 
-    val numClasses = numClassesVal
     instr.logNumClasses(numClasses)
     instr.logNumFeatures(numFeatures)
 
     val (coefficientVector, interceptVector, objectiveHistory) = {
 
-//      val featuresStd: Array[Double] = summarizer.variance.toArray.map(math.sqrt)
-      val featuresStd: Array[Double] = Array.fill(numFeatures)(1.0)
+      var featuresStd: Array[Double] = null
+      val useFeatureScaling = SparkEnv.get.conf.get("spark.ml.useFeatureScaling", "true").toBoolean
+      if (useFeatureScaling) {
+        featuresStd = summarizer.variance.toArray.map(math.sqrt)
+      }
+      else {
+        featuresStd = Array.fill(numFeatures)(1.0)
+      }
 
       val getFeaturesStd = (j: Int) => featuresStd(j)
       val regParamL2 = $(regParam)
@@ -293,9 +289,6 @@ class LinearSVC @Since("2.2.0") (
 
       def regParamL1Fun = (index: Int) => 0D
       val optimizer = new BreezeOWLQN[Int, BDV[Double]]($(maxIter), ghandbudget, regParamL1Fun, $(tol))
-      // initial weight is always 0.
-//      val initialCoefWithIntercept = Vectors.zeros(numFeaturesPlusIntercept)
-
       val initialCoefWithIntercept = getInitialModel(numFeaturesPlusIntercept, featuresStd)
 
       // zhipeng == calculate the loss given the initial model
@@ -307,8 +300,6 @@ class LinearSVC @Since("2.2.0") (
       val scaledObjectiveHistory = mutable.ArrayBuilder.make[Double]
       var state: optimizer.State = null
 
-      logInfo(s"ghand=params=reg:${getRegParam}=maxIter:${getMaxIter}=budget:${ghandbudget}" +
-        s"=tol:${getTol}")
       // add iterations control
       var iter: Int = 0
       var startTime: Long = 0
@@ -367,17 +358,17 @@ object LinearSVC extends DefaultParamsReadable[LinearSVC] {
 }
 
 /**
- * :: Experimental ::
- * Linear SVM Model trained by [[LinearSVC]]
- */
+  * :: Experimental ::
+  * Linear SVM Model trained by [[LinearSVC]]
+  */
 @Since("2.2.0")
 @Experimental
-class LinearSVCModel private[classification] (
-    @Since("2.2.0") override val uid: String,
-    @Since("2.2.0") val coefficients: Vector,
-    @Since("2.2.0") val intercept: Double)
+class LinearSVCModel private[classification](
+                                              @Since("2.2.0") override val uid: String,
+                                              @Since("2.2.0") val coefficients: Vector,
+                                              @Since("2.2.0") val intercept: Double)
   extends ClassificationModel[Vector, LinearSVCModel]
-  with LinearSVCParams with MLWritable {
+    with LinearSVCParams with MLWritable {
 
   @Since("2.2.0")
   override val numClasses: Int = 2
@@ -387,6 +378,7 @@ class LinearSVCModel private[classification] (
 
   @Since("2.2.0")
   def setThreshold(value: Double): this.type = set(threshold, value)
+
   setDefault(threshold, 0.0)
 
   @Since("2.2.0")
@@ -461,4 +453,5 @@ object LinearSVCModel extends MLReadable[LinearSVCModel] {
       model
     }
   }
+
 }
