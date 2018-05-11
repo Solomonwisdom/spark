@@ -22,14 +22,12 @@ import java.util.Random
 import breeze.linalg.{all, normalize, sum, DenseMatrix => BDM, DenseVector => BDV}
 import breeze.numerics.{abs, exp, trigamma}
 import breeze.stats.distributions.{Gamma, RandBasis}
-import org.apache.spark.TaskContext
 import org.apache.spark.annotation.{DeveloperApi, Since}
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.util.PeriodicGraphCheckpointer
 import org.apache.spark.internal.Logging
 import org.apache.spark.mllib.linalg.{DenseVector, Matrices, SparseVector, Vector, Vectors}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.storage.StorageLevel
 
 /**
  * :: DeveloperApi ::
@@ -642,7 +640,6 @@ private[clustering] object OnlineLDAOptimizer {
       //        K                  K * ids               ids
       gammad := (expElogthetad *:* (expElogbetad.t * (ctsVector /:/ phiNorm))) +:+ alpha
       // elementwise assignment
-      // Why gamma d is updated like this?  Why devided by PhiNorm?
       expElogthetad := exp(LDAUtils.dirichletExpectation(gammad))
       // TODO: Keep more values in log space, and only exponentiate when needed.
       phiNorm := expElogbetad * expElogthetad +:+ 1e-100
@@ -650,8 +647,6 @@ private[clustering] object OnlineLDAOptimizer {
     }
 
     val sstatsd = expElogthetad.asDenseMatrix.t * (ctsVector /:/ phiNorm).asDenseMatrix
-    // why this is different from the alg in paper? ----- zhipeng
-    TaskContext.isDebug
     (gammad, sstatsd, ids)
   }
 }
