@@ -44,7 +44,6 @@ import scala.collection.mutable
 private[classification] trait LinearSVCParams extends ClassifierParams with HasRegParam
   with HasMaxIter with HasFitIntercept with HasTol with HasStandardization with HasWeightCol
   with HasAggregationDepth with HasThreshold {
-
   /**
     * Param for threshold in binary classification prediction.
     * For LinearSVC, this threshold is applied to the rawPrediction, rather than a probability.
@@ -71,7 +70,7 @@ private[classification] trait LinearSVCParams extends ClassifierParams with HasR
 @Since("2.2.0")
 @Experimental
 class LinearSVC @Since("2.2.0")(
-                                 @Since("2.2.0") override val uid: String)
+    @Since("2.2.0") override val uid: String)
   extends Classifier[Vector, LinearSVC, LinearSVCModel]
     with LinearSVCParams with DefaultParamsWritable {
 
@@ -87,7 +86,6 @@ class LinearSVC @Since("2.2.0")(
     */
   @Since("2.2.0")
   def setRegParam(value: Double): this.type = set(regParam, value)
-
   setDefault(regParam -> 0.0)
 
   /**
@@ -98,7 +96,6 @@ class LinearSVC @Since("2.2.0")(
     */
   @Since("2.2.0")
   def setMaxIter(value: Int): this.type = set(maxIter, value)
-
   setDefault(maxIter -> 100)
 
   /**
@@ -109,7 +106,6 @@ class LinearSVC @Since("2.2.0")(
     */
   @Since("2.2.0")
   def setFitIntercept(value: Boolean): this.type = set(fitIntercept, value)
-
   setDefault(fitIntercept -> true)
 
   /**
@@ -121,7 +117,6 @@ class LinearSVC @Since("2.2.0")(
     */
   @Since("2.2.0")
   def setTol(value: Double): this.type = set(tol, value)
-
   setDefault(tol -> 1E-6)
 
   /**
@@ -132,7 +127,6 @@ class LinearSVC @Since("2.2.0")(
     */
   @Since("2.2.0")
   def setStandardization(value: Boolean): this.type = set(standardization, value)
-
   setDefault(standardization -> true)
 
   /**
@@ -152,7 +146,6 @@ class LinearSVC @Since("2.2.0")(
     */
   @Since("2.2.0")
   def setThreshold(value: Double): this.type = set(threshold, value)
-
   setDefault(threshold -> 0.0)
 
   /**
@@ -165,12 +158,10 @@ class LinearSVC @Since("2.2.0")(
     */
   @Since("2.2.0")
   def setAggregationDepth(value: Int): this.type = set(aggregationDepth, value)
-
   setDefault(aggregationDepth -> 2)
 
 
   var initialModel: Array[Double] = null
-
   def setInitialModel(initModel: Array[Double]): Unit = {
     initialModel = initModel
   }
@@ -207,7 +198,6 @@ class LinearSVC @Since("2.2.0")(
   }
 
   var ghandbudget: Int = 10
-
   /**
     * zhipeng
     *
