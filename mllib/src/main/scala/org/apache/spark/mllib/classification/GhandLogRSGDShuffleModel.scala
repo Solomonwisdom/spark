@@ -17,17 +17,11 @@
 
 package org.apache.spark.mllib.classification
 
-import org.apache.spark.SparkContext
 import org.apache.spark.annotation.Since
-import org.apache.spark.ml.linalg.DenseMatrix
-import org.apache.spark.ml.param.shared.HasRegParam
-import org.apache.spark.ml.util.Identifiable
-import org.apache.spark.mllib.classification.impl.GLMClassificationModel
-import org.apache.spark.mllib.linalg.{DenseVector, Vector, Vectors}
-import org.apache.spark.mllib.linalg.BLAS.dot
+import org.apache.spark.mllib.linalg.Vector
 import org.apache.spark.mllib.optimization._
 import org.apache.spark.mllib.regression._
-import org.apache.spark.mllib.util.{DataValidators}
+import org.apache.spark.mllib.util.DataValidators
 import org.apache.spark.rdd.RDD
 
 /**

@@ -237,13 +237,14 @@ class LinearSVC @Since("2.2.0")(
       }
       instances.treeAggregate(
         (new MultivariateOnlineSummarizer)
-      )(seqOp, combOp, 3)
+      )(seqOp, combOp, 2)
     }
 
-    val numFeatures = SparkEnv.get.conf.get("spark.ml.numFeature", "-1").toInt
-    if (numFeatures == -1) {
-      throw new IllegalArgumentException("ghand: please set -spark.ml.numFeature- for LinearSVC class.")
-    }
+//    val numFeatures = SparkEnv.get.conf.get("spark.ml.numFeature", "-1").toInt
+//    if (numFeatures == -1) {
+//      throw new IllegalArgumentException("ghand: please set -spark.ml.numFeature- for LinearSVC class.")
+//    }
+    val numFeatures: Int = instances.map(_.features.size).first()
     val numFeaturesPlusIntercept = if (getFitIntercept) numFeatures + 1 else numFeatures
     val numClasses = SparkEnv.get.conf.get("spark.ml.numClasses", "2").toInt
     logInfo(s"ghand=We assume binary classification")

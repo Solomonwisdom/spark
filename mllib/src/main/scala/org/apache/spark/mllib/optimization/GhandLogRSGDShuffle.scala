@@ -24,12 +24,11 @@ import org.apache.spark.mllib.linalg.{DenseVector, SparseVector, Vector, Vectors
 import org.apache.spark.rdd.RDD
 import breeze.linalg.{norm => brzNorm}
 import org.apache.spark.mllib.linalg.BLAS._
-import org.apache.spark.{HashPartitioner, TaskContext}
+import org.apache.spark.{HashPartitioner, SparkEnv, TaskContext}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.mllib.classification.{GhandLogRSGDShuffleModel, LogisticRegressionModel}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.mllib.util.MLUtils
-import org.apache.spark.mllib.WhetherDebug
 
 
 /**
@@ -272,7 +271,7 @@ object GhandLogRSGDShuffle extends Logging {
                numIter: Int, stepSize: Double, regParam: Double, numFeatures: Int, numExamples: Long): DenseVector = {
 
     if (numIter > 0) {
-      if (WhetherDebug.isDebug) {
+      if(SparkEnv.get.conf.get("spark.ml.debug", "false").toBoolean){
         val weights_tmp = initModelRDD.take(1)(0)
 
         val train_loss = dataRDD.map(x => {

@@ -20,16 +20,15 @@ package org.apache.spark.mllib.optimization
 import scala.collection.mutable.ArrayBuffer
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.Logging
-import org.apache.spark.mllib.linalg.{DenseVector, SparseVector, Vector, Vectors}
+import org.apache.spark.mllib.linalg.{DenseVector, Vector, Vectors}
 import org.apache.spark.rdd.RDD
 import breeze.linalg.{norm => brzNorm}
 import org.apache.spark.mllib.linalg.BLAS._
 import org.apache.spark.{HashPartitioner, TaskContext}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.feature.Instance
-import org.apache.spark.mllib.WhetherDebug
 import org.apache.spark.mllib.stat.MultivariateOnlineSummarizer
-
+import org.apache.spark.SparkEnv
 
 /**
   * WARN BY ZHIPENG:
@@ -50,9 +49,7 @@ class GhandSVMSGDShuffleStand private[spark] (private var gradient: Gradient, pr
   private var numIterations: Int = 100
   private var regParam: Double = 0.0
   private var miniBatchFraction: Double = 1.0
-  //  private var convergenceTol: Double = 0.001
   private var convergenceTol: Double = 0.0
-  private var ghandNumFeatures: Int = -1
   /**
     * Set the initial step size of SGD for the first step. Default 1.0.
     * In subsequent steps, the step size will decrease with stepSize/sqrt(t)
@@ -61,11 +58,6 @@ class GhandSVMSGDShuffleStand private[spark] (private var gradient: Gradient, pr
     require(step > 0,
       s"Initial step size must be positive but got ${step}")
     this.stepSize = step
-    this
-  }
-
-  def setGhandNumFeatures(numFeatures: Int): this.type ={
-    this.ghandNumFeatures = numFeatures
     this
   }
 
@@ -159,8 +151,8 @@ class GhandSVMSGDShuffleStand private[spark] (private var gradient: Gradient, pr
       regParam,
       miniBatchFraction,
       initialWeights,
-      convergenceTol,
-      ghandNumFeatures)
+      convergenceTol)
+
     weights
   }
 
@@ -206,9 +198,7 @@ object GhandSVMSGDShuffleStand extends Logging {
                        regParam: Double,
                        miniBatchFraction: Double,
                        initialWeights: Vector,
-                       convergenceTol: Double,
-                       ghandNumFeatures: Int): (Vector, Array[Double]) = {
-
+                       convergenceTol: Double): (Vector, Array[Double]) = {
     // convergenceTol should be set with non minibatch settings
     if (miniBatchFraction < 1.0 && convergenceTol > 0.0) {
       logWarning("Testing against a convergenceTol when using miniBatchFraction " +
@@ -231,31 +221,32 @@ object GhandSVMSGDShuffleStand extends Logging {
     if (numExamples * miniBatchFraction < 1) {
       logWarning("The miniBatchFraction is too small")
     }
-
     // ghand: add ways to pre-process the data to calculate the variance.
     val instances: RDD[Instance] = data.map(
       x=>
         Instance(x._1, 1, x._2.asML)
     )
-
     val summarizer = {
       val seqOp = (c: MultivariateOnlineSummarizer,
                    instance: Instance) =>{
         c.add(Vectors.fromML(instance.features), instance.weight)
       }
-
       val combOp = (c1: MultivariateOnlineSummarizer,
                     c2: MultivariateOnlineSummarizer) =>{
         c1.merge(c2)
       }
-
       instances.treeAggregate(
         (new MultivariateOnlineSummarizer)
       )(seqOp, combOp, 3)
     }
 
-    val featuresStd = summarizer.variance.toArray.map(math.sqrt)
-//    val featuresStd: Array[Double] = Array.fill(ghandNumFeatures)(1.0)
+    var featuresStd: Array[Double] = null
+    if(SparkEnv.get.conf.get("spark.ml.useFeatureScaling", "true").toBoolean) {
+      featuresStd = summarizer.variance.toArray.map(math.sqrt)
+    }
+    else{
+       featuresStd = Array.fill(initialWeights.size)(1.0)
+    }
 
     val bcFeatureStd: Broadcast[Array[Double]] = data.context.broadcast(featuresStd)
 
@@ -285,7 +276,7 @@ object GhandSVMSGDShuffleStand extends Logging {
                numFeatures: Int, numExamples: Long, bcFeatureStd: Broadcast[Array[Double]]): DenseVector = {
 
     var time_cal_loss: Double = 0.0
-    if (WhetherDebug.isDebug) {
+    if(SparkEnv.get.conf.get("spark.ml.debug", "false").toBoolean){
       // do not take it back, calculate loss with data locality and return the loss.
       val calLoss = (itd: Iterator[(Double, Vector)], itm: Iterator[DenseVector]) => {
         val start_time = System.currentTimeMillis()
@@ -408,8 +399,8 @@ object GhandSVMSGDShuffleStand extends Logging {
                 while(k < nnz){
                   val fea_std = localFeatureStd(dataPointIndices(k))
                   if (fea_std != 0.0){
-//                    model_values(dataPointIndices(k)) += (-labelScaled) * (-transStepSize) * dataPointValues(k) / Math.pow(fea_std, 2)
-                    model_values(dataPointIndices(k)) += (-labelScaled) * (-transStepSize) * dataPointValues(k) / Math.pow(fea_std, 1)
+                    model_values(dataPointIndices(k)) += (-labelScaled) * (-transStepSize) * dataPointValues(k) / Math.pow(fea_std, 2)
+//                    model_values(dataPointIndices(k)) += (-labelScaled) * (-transStepSize) * dataPointValues(k) / Math.pow(fea_std, 1)
                   }
 //                  else {
 //                    model_values(dataPointIndices(k)) += (-labelScaled) * (-transStepSize) * dataPointValues(k)
@@ -467,8 +458,8 @@ object GhandSVMSGDShuffleStand extends Logging {
                 while(k < nnz){
                   val fea_std = localFeatureStd(dataPointIndices(k))
                   if (fea_std != 0.0){
-//                    model_values(dataPointIndices(k)) += (-labelScaled) * (-transStepSize) * dataPointValues(k) / Math.pow(fea_std, 2)
-                    model_values(dataPointIndices(k)) += (-labelScaled) * (-transStepSize) * dataPointValues(k) / Math.pow(fea_std, 1)
+                    model_values(dataPointIndices(k)) += (-labelScaled) * (-transStepSize) * dataPointValues(k) / Math.pow(fea_std, 2)
+//                    model_values(dataPointIndices(k)) += (-labelScaled) * (-transStepSize) * dataPointValues(k) / Math.pow(fea_std, 1)
                   }
 //                  else {
 //                    model_values(dataPointIndices(k)) += (-labelScaled) * (-transStepSize) * dataPointValues(k)
@@ -601,11 +592,9 @@ object GhandSVMSGDShuffleStand extends Logging {
                        numIterations: Int,
                        regParam: Double,
                        miniBatchFraction: Double,
-                       initialWeights: Vector,
-                       numFeatures: Int): (Vector, Array[Double]) =
-    GhandSVMSGDShuffleStand.runMiniBatchSGD(data, gradient, updater, stepSize, numIterations,
-      regParam, miniBatchFraction, initialWeights, 0.001, numFeatures)
-
+                       initialWeights: Vector): (Vector, Array[Double]) =
+    GhandSVMSGDShuffleStand.runMiniBatchSGD(
+      data, gradient, updater, stepSize, numIterations, regParam, miniBatchFraction, initialWeights, 0.001)
 
   private def isConverged(
                            previousWeights: Vector,

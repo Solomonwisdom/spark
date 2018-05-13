@@ -26,8 +26,7 @@ import breeze.linalg.{norm => brzNorm}
 import org.apache.spark.mllib.linalg.BLAS._
 import org.apache.spark.{HashPartitioner, TaskContext}
 import org.apache.spark.broadcast.Broadcast
-import org.apache.spark.mllib.WhetherDebug
-
+import org.apache.spark.SparkEnv
 import scala.util.Random
 
 /**
@@ -44,7 +43,6 @@ class GhandSVMSGDShuffle private[spark] (private var gradient: Gradient, private
   private var numIterations: Int = 100
   private var regParam: Double = 0.0
   private var miniBatchFraction: Double = 1.0
-  //  private var convergenceTol: Double = 0.001
   private var convergenceTol: Double = 0.0
   /**
     * Set the initial step size of SGD for the first step. Default 1.0.
@@ -244,7 +242,7 @@ object GhandSVMSGDShuffle extends Logging {
                numIter: Int, stepSize: Double, regParam: Double, numFeatures: Int, numExamples: Long): DenseVector = {
 
     var time_cal_loss: Double = 0.0
-    if (WhetherDebug.isDebug) {
+    if(SparkEnv.get.conf.get("spark.ml.debug", "false").toBoolean){
       // do not take it back, calculate loss with data locality and return the loss.
       val calLoss = (itd: Iterator[(Double, Vector)], itm: Iterator[DenseVector]) => {
         val start_time = System.currentTimeMillis()
@@ -337,17 +335,19 @@ object GhandSVMSGDShuffle extends Logging {
       (itd: Iterator[(Double, Vector)], itm: Iterator[DenseVector]) => {
         val localModel: DenseVector = itm.next()
 
-//        if (TaskContext.getPartitionId() == 1 || TaskContext.getPartitionId() == 0){
-//          if (localModel.size < 10000000) {
-//            Thread.sleep(Random.nextInt(4) * 1000)
-//          }
-//          else if (localModel.size < 30000000){
-//            Thread.sleep(Random.nextInt(20) * 1000)
-//          }
-//          else if (localModel.size < 60000000){
-//            Thread.sleep(Random.nextInt(60) * 1000)
-//          }
-//        }
+        if(!SparkEnv.get.conf.get("spark.ml.straggler", "false").toBoolean) {
+          if (TaskContext.getPartitionId() == 1 || TaskContext.getPartitionId() == 0) {
+            if (localModel.size < 10000000) {
+              Thread.sleep(Random.nextInt(4) * 1000)
+            }
+            else if (localModel.size < 30000000) {
+              Thread.sleep(Random.nextInt(20) * 1000)
+            }
+            else if (localModel.size < 60000000) {
+              Thread.sleep(Random.nextInt(60) * 1000)
+            }
+          }
+        }
 
         val startPoint: (DenseVector, Double) = (localModel, 1.0) // for L2 sparseUpdate
         // when the factor c is too small, will update the model in a dense way.
@@ -394,17 +394,19 @@ object GhandSVMSGDShuffle extends Logging {
         // have to specify it as copy when debugging, because when debugging, it will cause multiple iterations
         // over the data
         // conform the result to be a iterator of model
-//        if (TaskContext.getPartitionId() == 1 || TaskContext.getPartitionId() == 0){
-//          if (localModel.size < 10000000) {
-//            Thread.sleep(Random.nextInt(4) * 1000)
-//          }
-//          else if (localModel.size < 30000000){
-//            Thread.sleep(Random.nextInt(20) * 1000)
-//          }
-//          else if (localModel.size < 60000000){
-//            Thread.sleep(Random.nextInt(60) * 1000)
-//          }
-//        }
+        if(!SparkEnv.get.conf.get("spark.ml.straggler", "false").toBoolean) {
+          if (TaskContext.getPartitionId() == 1 || TaskContext.getPartitionId() == 0) {
+            if (localModel.size < 10000000) {
+              Thread.sleep(Random.nextInt(4) * 1000)
+            }
+            else if (localModel.size < 30000000) {
+              Thread.sleep(Random.nextInt(20) * 1000)
+            }
+            else if (localModel.size < 60000000) {
+              Thread.sleep(Random.nextInt(60) * 1000)
+            }
+          }
+        }
         val startPoint: (DenseVector, Double) = (localModel, 1.0) // for L2 sparseUpdate
         // when the factor c is too small, will update the model in a dense way.
         val newModel = itd.foldLeft(startPoint)(
@@ -424,7 +426,6 @@ object GhandSVMSGDShuffle extends Logging {
               val labelScaled = 2 * dataPoint._1 - 1.0
               val local_loss = if (1.0 > labelScaled * dotProduct) {
                 axpy((-labelScaled) * (-transStepSize), dataPoint._2, model)
-                // What a fucking day! I keeped finding the 'minus' for five hours -- because I am not focused enough.
                 1.0 - labelScaled * dotProduct
               } else {
                 0
