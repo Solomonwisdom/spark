@@ -288,9 +288,10 @@ object GradientDescent extends Logging {
     logInfo(s"ghand=Iteration:${iterationId}=" +
       s"TimeWithOutLoss:${(train_end_time - train_start_time) / 1000.0 - time_cal_loss}")
 
+    val feature_dim: Int = weights.size
     train_start_time = System.currentTimeMillis()
     val (gradientSum, lossSum, miniBatchSize) = data.sample(false, miniBatchFraction, 42 + iterationId)
-      .treeAggregate((BDV.zeros[Double](numExamples), 0.0, 0L))(
+      .treeAggregate((BDV.zeros[Double](feature_dim), 0.0, 0L))(
         seqOp = (c, v) => {
           // c: (grad, loss, count), v: (label, features)
           val l = gradient.compute(v._2, v._1, bcWeights.value, Vectors.fromBreeze(c._1))
@@ -532,9 +533,12 @@ object GradientDescent extends Logging {
         }
 
         k = 0
+        val power_beta1 = 1 - math.pow(beta1, i)
+        val power_beta2 = 1 - math.pow(beta2, i)
         while (k < feature_dim) {
           if (featuresStd(k) != 0) {
-            weight_array(k) -= stepSize / math.sqrt(epsilon + expectation_g2(k)) * velocity(k)
+            weight_array(k) -= stepSize / math.sqrt(epsilon + expectation_g2(k) /
+              power_beta2) * velocity(k) / power_beta1
           }
           k += 1
         }
