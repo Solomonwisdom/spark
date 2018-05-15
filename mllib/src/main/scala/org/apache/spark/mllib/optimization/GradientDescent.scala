@@ -180,6 +180,17 @@ class GradientDescent private[spark](private var gradient: Gradient, private var
         initialWeights,
         convergenceTol
       )
+      case "amsgrad" => GradientDescent.runMiniBatchAMSGradSGD(
+        data,
+        gradient,
+        updater,
+        stepSize,
+        numIterations,
+        regParam,
+        miniBatchFraction,
+        initialWeights,
+        convergenceTol
+      )
       case _ => null
     }
     weights
@@ -234,12 +245,11 @@ object GradientDescent extends Logging {
 
   /**
     * return the L2 regularization value given a model
-    * @param weight
+    * @param weight_array
     * @param regParam
     * @return
     */
-  def L2reg(weight: Vector, regParam: Double): Double = {
-    val weight_array = weight.toArray
+  def L2reg(weight_array: Array[Double], regParam: Double): Double = {
     val size = weight_array.length
     var k = 0
     var result = 0.0
@@ -279,7 +289,7 @@ object GradientDescent extends Logging {
         .reduce((x, y) => x + y)
       val end_time = System.currentTimeMillis()
 
-      val reg_val = L2reg(bcWeights.value, regParam)
+      val reg_val = L2reg(bcWeights.value.toArray, regParam)
       time_cal_loss = (end_time - start_time) / 1000.0
       logInfo(s"ghand=Iteration:${iterationId}=TimeCalLoss:${time_cal_loss}")
       logInfo(s"ghandTrainLoss=Iteration:${iterationId}=trainLoss:${(train_loss) / numExamples + reg_val}")
@@ -353,7 +363,7 @@ object GradientDescent extends Logging {
         weights, regParam, numExamples, i)
 
       if (miniBatchSize > 0) {
-        val batch_loss = lossSum / miniBatchSize + L2reg(weights, regParam)
+        val batch_loss = lossSum / miniBatchSize + L2reg(weights.toArray, regParam)
         logInfo(s"ghand=Iteration:${i}=trainBatchLoss=${batch_loss}")
         // we assume L2 regularization
         // weight = weight - stepSize * (gradient / scaleVector) - stepSize * regParam * (weight / scaleVector)
@@ -400,7 +410,7 @@ object GradientDescent extends Logging {
         weights, regParam, numExamples, i)
 
       if (miniBatchSize > 0) {
-        val batch_loss = lossSum / miniBatchSize + L2reg(weights, regParam)
+        val batch_loss = lossSum / miniBatchSize + L2reg(weights.toArray, regParam)
         logInfo(s"ghand=Iteration:${i}=trainBatchLoss=${batch_loss}")
 
         // we assume L2 regularization
@@ -457,7 +467,7 @@ object GradientDescent extends Logging {
         weights, regParam, numExamples, i)
 
       if (miniBatchSize > 0) {
-        val batch_loss = lossSum / miniBatchSize + L2reg(weights, regParam)
+        val batch_loss = lossSum / miniBatchSize + L2reg(weights.toArray, regParam)
         logInfo(s"ghand=Iteration:${i}=trainBatchLoss=${batch_loss}")
         // we assume L2 regularization
         // weight = weight - stepSize * (gradient / scaleVector) - stepSize * regParam * (weight / scaleVector)
@@ -466,14 +476,15 @@ object GradientDescent extends Logging {
         val weight_array = weights.toArray
         while (k < expectation_g2.length) {
           expectation_g2(k) = expectation_g2(k) * forget +
-            (1 - forget) * math.pow(gradientSum(k) / miniBatchSize + weight_array(k) * regParam, 2)
+              (1 - forget) * math.pow(gradientSum(k) / miniBatchSize + weight_array(k) * regParam, 2)
           k += 1
         }
 
         k = 0
         while (k < feature_dim) {
           if (featuresStd(k) != 0) {
-            weight_array(k) -= stepSize / math.sqrt(epsilon + expectation_g2(k)) * gradientSum(k) / miniBatchSize
+            weight_array(k) -=
+              stepSize / math.sqrt(epsilon + expectation_g2(k)) * gradientSum(k) / miniBatchSize
           }
           k += 1
         }
@@ -499,6 +510,70 @@ object GradientDescent extends Logging {
                            convergenceTol: Double): (Vector, Array[Double]) = {
 
     val numExamples: Int = data.count().toInt
+    var weights = initialWeights
+    val featuresStd: Array[Double] = getFeatureStd(data, weights.size)
+    train_start_time = System.currentTimeMillis()
+    val epsilon = SparkEnv.get.conf.getDouble("spark.ml.sgd.adam.epsilon", 1e-7)
+    val beta1 = SparkEnv.get.conf.getDouble("spark.ml.sgd.adam.beta1", 0.9)
+    val beta2 = SparkEnv.get.conf.getDouble("spark.ml.sgd.adam.beta2", 0.99)
+    val expectation_g2: Array[Double] = Array.fill(weights.size)(0)
+    val velocity: Array[Double] = Array.fill(weights.size)(0)
+    var i = 1
+    var k = 0
+    while (i <= numIterations) {
+
+      val (gradientSum, lossSum, miniBatchSize) = computeGradient(data, gradient, miniBatchFraction,
+        weights, regParam, numExamples, i)
+
+      if (miniBatchSize > 0) {
+        val batch_loss = lossSum / miniBatchSize + L2reg(weights.toArray, regParam)
+        logInfo(s"ghand=Iteration:${i}=trainBatchLoss=${batch_loss}")
+
+        // we assume L2 regularization
+        // weight = weight - stepSize * (gradient / scaleVector) - stepSize * regParam * (weight / scaleVector)
+        val feature_dim = featuresStd.size
+        val weight_array = weights.toArray
+        k = 0
+        while (k < velocity.length) {
+          velocity(k) =
+            beta1 * velocity(k) + (1 - beta1) * (gradientSum(k) / miniBatchSize + weight_array(k) * regParam)
+          expectation_g2(k) =
+            beta2 * expectation_g2(k) + (1 - beta2) * math.pow(gradientSum(k) / miniBatchSize + weight_array(k) * regParam, 2)
+          k += 1
+        }
+
+        val power_beta1 = 1 - math.pow(beta1, i)
+        val power_beta2 = 1 - math.pow(beta2, i)
+        k = 0
+        while (k < feature_dim) {
+          if (featuresStd(k) != 0) {
+            weight_array(k) -=
+              stepSize / math.sqrt(epsilon + expectation_g2(k) / power_beta2) * velocity(k) / power_beta1
+          }
+          k += 1
+        }
+        weights = Vectors.dense(weight_array)
+      }
+
+      i += 1
+    }
+
+    (weights, null)
+  }
+
+
+  def runMiniBatchAMSGradSGD(
+                           data: RDD[(Double, Vector)],
+                           gradient: Gradient,
+                           updater: Updater,
+                           stepSize: Double,
+                           numIterations: Int,
+                           regParam: Double,
+                           miniBatchFraction: Double,
+                           initialWeights: Vector,
+                           convergenceTol: Double): (Vector, Array[Double]) = {
+
+    val numExamples: Int = data.count().toInt
     val featuresStd: Array[Double] = getFeatureStd(data, initialWeights.size)
     var weights = initialWeights
     var i = 1
@@ -508,6 +583,7 @@ object GradientDescent extends Logging {
     val beta2 = SparkEnv.get.conf.getDouble("spark.ml.sgd.adam.beta2", 0.99)
     val expectation_g2: Array[Double] = Array.fill(weights.size)(0)
     val velocity: Array[Double] = Array.fill(weights.size)(0)
+    val expectation_g2_head: Array[Double] = Array.fill(weights.size)(0)
 
     while (i <= numIterations) {
 
@@ -515,7 +591,7 @@ object GradientDescent extends Logging {
         weights, regParam, numExamples, i)
 
       if (miniBatchSize > 0) {
-        val batch_loss = lossSum / miniBatchSize + L2reg(weights, regParam)
+        val batch_loss = lossSum / miniBatchSize + L2reg(weights.toArray, regParam)
         logInfo(s"ghand=Iteration:${i}=trainBatchLoss=${batch_loss}")
 
         // we assume L2 regularization
@@ -525,10 +601,10 @@ object GradientDescent extends Logging {
         val weight_array = weights.toArray
         while (k < velocity.length) {
           velocity(k) = beta1 * velocity(k)
-          +(1 - beta1) * (gradientSum(k) / miniBatchSize + weight_array(k) * regParam)
+            + (1 - beta1) * (gradientSum(k) / miniBatchSize + weight_array(k) * regParam)
           expectation_g2(k) = beta2 * expectation_g2(k)
-          +(1 - beta2) * math.pow(gradientSum(k) / miniBatchSize + weight_array(k) * regParam, 2)
-
+            +(1 - beta2) * math.pow(gradientSum(k) / miniBatchSize + weight_array(k) * regParam, 2)
+          expectation_g2_head(k) = math.max(expectation_g2(k), expectation_g2_head(k))
           k += 1
         }
 
@@ -537,7 +613,7 @@ object GradientDescent extends Logging {
         val power_beta2 = 1 - math.pow(beta2, i)
         while (k < feature_dim) {
           if (featuresStd(k) != 0) {
-            weight_array(k) -= stepSize / math.sqrt(epsilon + expectation_g2(k) /
+            weight_array(k) -= stepSize / math.sqrt(epsilon + expectation_g2_head(k) /
               power_beta2) * velocity(k) / power_beta1
           }
           k += 1
