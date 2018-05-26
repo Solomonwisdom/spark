@@ -600,10 +600,8 @@ object GradientDescent extends Logging {
         var k = 0
         val weight_array = weights.toArray
         while (k < velocity.length) {
-          velocity(k) = beta1 * velocity(k)
-            + (1 - beta1) * (gradientSum(k) / miniBatchSize + weight_array(k) * regParam)
-          expectation_g2(k) = beta2 * expectation_g2(k)
-            +(1 - beta2) * math.pow(gradientSum(k) / miniBatchSize + weight_array(k) * regParam, 2)
+          velocity(k) = beta1 * velocity(k) + (1 - beta1) * (gradientSum(k) / miniBatchSize + weight_array(k) * regParam)
+          expectation_g2(k) = beta2 * expectation_g2(k) +(1 - beta2) * math.pow(gradientSum(k) / miniBatchSize + weight_array(k) * regParam, 2)
           expectation_g2_head(k) = math.max(expectation_g2(k), expectation_g2_head(k))
           k += 1
         }
