@@ -663,6 +663,7 @@ class LogisticRegression @Since("1.2.0") (
             new BreezeLBFGSB(
               BDV[Double](lowerBounds), BDV[Double](upperBounds), $(maxIter), 10, $(tol))
           } else {
+            logInfo(s"ghand=I guess this is where the BreezeLBFGS happens.")
             new BreezeLBFGS[BDV[Double]]($(maxIter), 10, $(tol))
           }
         } else {

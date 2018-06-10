@@ -626,6 +626,11 @@ private[ann] class ANNGradient(topology: Topology, dataStacker: DataStacker) ext
     val model = topology.model(weights)
     model.computeGradient(input, target, cumGradient, realBatchSize)
   }
+
+  override def computeLoss(weightOld: OldVector, label: Double, gradient: OldVector): Double = {
+    // zhipeng: to implement this.
+    0.0
+  }
 }
 
 /**
@@ -705,6 +710,7 @@ private[ann] class ANNUpdater extends Updater {
     Baxpy(-thisIterStepSize, gradient.asBreeze, brzWeights)
     (OldVectors.fromBreeze(brzWeights), 0)
   }
+
 }
 
 /**

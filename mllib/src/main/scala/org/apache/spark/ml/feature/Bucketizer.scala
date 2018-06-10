@@ -19,10 +19,6 @@ package org.apache.spark.ml.feature
 
 import java.{util => ju}
 
-import org.json4s.JsonDSL._
-import org.json4s.JValue
-import org.json4s.jackson.JsonMethods._
-
 import org.apache.spark.SparkException
 import org.apache.spark.annotation.Since
 import org.apache.spark.ml.Model
@@ -36,13 +32,11 @@ import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{DoubleType, StructField, StructType}
 
 /**
- * `Bucketizer` maps a column of continuous features to a column of feature buckets.
- *
- * Since 2.3.0,
+ * `Bucketizer` maps a column of continuous features to a column of feature buckets. Since 2.3.0,
  * `Bucketizer` can map multiple columns at once by setting the `inputCols` parameter. Note that
- * when both the `inputCol` and `inputCols` parameters are set, an Exception will be thrown. The
- * `splits` parameter is only used for single column usage, and `splitsArray` is for multiple
- * columns.
+ * when both the `inputCol` and `inputCols` parameters are set, a log warning will be printed and
+ * only `inputCol` will take effect, while `inputCols` will be ignored. The `splits` parameter is
+ * only used for single column usage, and `splitsArray` is for multiple columns.
  */
 @Since("1.4.0")
 final class Bucketizer @Since("1.4.0") (@Since("1.4.0") override val uid: String)
@@ -140,11 +134,28 @@ final class Bucketizer @Since("1.4.0") (@Since("1.4.0") override val uid: String
   @Since("2.3.0")
   def setOutputCols(value: Array[String]): this.type = set(outputCols, value)
 
+  /**
+   * Determines whether this `Bucketizer` is going to map multiple columns. If and only if
+   * `inputCols` is set, it will map multiple columns. Otherwise, it just maps a column specified
+   * by `inputCol`. A warning will be printed if both are set.
+   */
+  private[feature] def isBucketizeMultipleColumns(): Boolean = {
+    if (isSet(inputCols) && isSet(inputCol)) {
+      logWarning("Both `inputCol` and `inputCols` are set, we ignore `inputCols` and this " +
+        "`Bucketizer` only map one column specified by `inputCol`")
+      false
+    } else if (isSet(inputCols)) {
+      true
+    } else {
+      false
+    }
+  }
+
   @Since("2.0.0")
   override def transform(dataset: Dataset[_]): DataFrame = {
     val transformedSchema = transformSchema(dataset.schema)
 
-    val (inputColumns, outputColumns) = if (isSet(inputCols)) {
+    val (inputColumns, outputColumns) = if (isBucketizeMultipleColumns()) {
       ($(inputCols).toSeq, $(outputCols).toSeq)
     } else {
       (Seq($(inputCol)), Seq($(outputCol)))
@@ -159,7 +170,7 @@ final class Bucketizer @Since("1.4.0") (@Since("1.4.0") override val uid: String
       }
     }
 
-    val seqOfSplits = if (isSet(inputCols)) {
+    val seqOfSplits = if (isBucketizeMultipleColumns()) {
       $(splitsArray).toSeq
     } else {
       Seq($(splits))
@@ -190,18 +201,9 @@ final class Bucketizer @Since("1.4.0") (@Since("1.4.0") override val uid: String
 
   @Since("1.4.0")
   override def transformSchema(schema: StructType): StructType = {
-    ParamValidators.checkSingleVsMultiColumnParams(this, Seq(outputCol, splits),
-      Seq(outputCols, splitsArray))
-
-    if (isSet(inputCols)) {
-      require(getInputCols.length == getOutputCols.length &&
-        getInputCols.length == getSplitsArray.length, s"Bucketizer $this has mismatched Params " +
-        s"for multi-column transform.  Params (inputCols, outputCols, splitsArray) should have " +
-        s"equal lengths, but they have different lengths: " +
-        s"(${getInputCols.length}, ${getOutputCols.length}, ${getSplitsArray.length}).")
-
+    if (isBucketizeMultipleColumns()) {
       var transformedSchema = schema
-      $(inputCols).zip($(outputCols)).zipWithIndex.foreach { case ((inputCol, outputCol), idx) =>
+      $(inputCols).zip($(outputCols)).zipWithIndex.map { case ((inputCol, outputCol), idx) =>
         SchemaUtils.checkNumericType(transformedSchema, inputCol)
         transformedSchema = SchemaUtils.appendColumn(transformedSchema,
           prepOutputField($(splitsArray)(idx), outputCol))
@@ -217,8 +219,6 @@ final class Bucketizer @Since("1.4.0") (@Since("1.4.0") override val uid: String
   override def copy(extra: ParamMap): Bucketizer = {
     defaultCopy[Bucketizer](extra).setParent(parent)
   }
-
-  override def write: MLWriter = new Bucketizer.BucketizerWriter(this)
 }
 
 @Since("1.6.0")
@@ -293,28 +293,6 @@ object Bucketizer extends DefaultParamsReadable[Bucketizer] {
           insertPos - 1
         }
       }
-    }
-  }
-
-
-  private[Bucketizer] class BucketizerWriter(instance: Bucketizer) extends MLWriter {
-
-    override protected def saveImpl(path: String): Unit = {
-      // SPARK-23377: The default params will be saved and loaded as user-supplied params.
-      // Once `inputCols` is set, the default value of `outputCol` param causes the error
-      // when checking exclusive params. As a temporary to fix it, we skip the default value
-      // of `outputCol` if `inputCols` is set when saving the metadata.
-      // TODO: If we modify the persistence mechanism later to better handle default params,
-      // we can get rid of this.
-      var paramWithoutOutputCol: Option[JValue] = None
-      if (instance.isSet(instance.inputCols)) {
-        val params = instance.extractParamMap().toSeq
-        val jsonParams = params.filter(_.param != instance.outputCol).map { case ParamPair(p, v) =>
-          p.name -> parse(p.jsonEncode(v))
-        }.toList
-        paramWithoutOutputCol = Some(render(jsonParams))
-      }
-      DefaultParamsWriter.saveMetadata(instance, path, sc, paramMap = paramWithoutOutputCol)
     }
   }
 

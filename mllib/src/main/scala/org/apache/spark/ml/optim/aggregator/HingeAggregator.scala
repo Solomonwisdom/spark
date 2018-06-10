@@ -39,6 +39,9 @@ private[ml] class HingeAggregator(
     fitIntercept: Boolean)(bcCoefficients: Broadcast[Vector])
   extends DifferentiableLossAggregator[Instance, HingeAggregator] {
 
+  // have a local model, which is coefficientsArray;
+  // have a local variable, for summing the loss.
+
   private val numFeatures: Int = bcFeaturesStd.value.length
   private val numFeaturesPlusIntercept: Int = if (fitIntercept) numFeatures + 1 else numFeatures
   @transient private lazy val coefficientsArray = bcCoefficients.value match {
@@ -70,6 +73,13 @@ private[ml] class HingeAggregator(
         var sum = 0.0
         features.foreachActive { (index, value) =>
           if (localFeaturesStd(index) != 0.0 && value != 0.0) {
+            // we always need the data to be standardized.
+            // ghandzhipeng.
+            // what if the data is already standardized? then bsFeatureStd is none.
+            // If not standardized, bsFeatureStd is not none.
+            // if localFeaturesStd(i) == 0, it may help this somehow.
+            // there are two cases, one with standardization, one without, the meaning of the following
+            // code is totally different.
             sum += localCoefficients(index) * value / localFeaturesStd(index)
           }
         }
@@ -86,9 +96,12 @@ private[ml] class HingeAggregator(
       }
 
       if (1.0 > labelScaled * dotProduct) {
-        val gradientScale = -labelScaled * weight
+        val gradientScale = -labelScaled * weight // here weight is the the weight of this instance
         features.foreachActive { (index, value) =>
           if (localFeaturesStd(index) != 0.0 && value != 0.0) {
+            // if no standardization, the stored model is not the real model, but whenever you compute it,
+            // we will compute the real one like regularizaiton.
+            // if there is standardization, we store the real one.
             localGradientSumArray(index) += value * gradientScale / localFeaturesStd(index)
           }
         }

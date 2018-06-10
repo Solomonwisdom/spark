@@ -24,7 +24,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.ml.linalg.{Vector, Vectors, VectorUDT}
 import org.apache.spark.sql.Column
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Expression, ImplicitCastInputTypes, UnsafeArrayData}
+import org.apache.spark.sql.catalyst.expressions.{Expression, UnsafeArrayData}
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, Complete, TypedImperativeAggregate}
 import org.apache.spark.sql.functions.lit
 import org.apache.spark.sql.types._
@@ -41,7 +41,7 @@ sealed abstract class SummaryBuilder {
   /**
    * Returns an aggregate object that contains the summary of the column with the requested metrics.
    * @param featuresCol a column that contains features Vector object.
-   * @param weightCol a column that contains weight value. Default weight is 1.0.
+   * @param weightCol a column that contains weight value.
    * @return an aggregate column that contains the statistics. The exact content of this
    *         structure is determined during the creation of the builder.
    */
@@ -50,7 +50,6 @@ sealed abstract class SummaryBuilder {
 
   @Since("2.3.0")
   def summary(featuresCol: Column): Column = summary(featuresCol, lit(1.0))
-
 }
 
 /**
@@ -61,18 +60,15 @@ sealed abstract class SummaryBuilder {
  * This class lets users pick the statistics they would like to extract for a given column. Here is
  * an example in Scala:
  * {{{
- *   import org.apache.spark.ml.linalg._
- *   import org.apache.spark.sql.Row
- *   val dataframe = ... // Some dataframe containing a feature column and a weight column
- *   val multiStatsDF = dataframe.select(
- *       Summarizer.metrics("min", "max", "count").summary($"features", $"weight")
- *   val Row(Row(minVec, maxVec, count)) = multiStatsDF.first()
+ *   val dataframe = ... // Some dataframe containing a feature column
+ *   val allStats = dataframe.select(Summarizer.metrics("min", "max").summary($"features"))
+ *   val Row(Row(min_, max_)) = allStats.first()
  * }}}
  *
  * If one wants to get a single metric, shortcuts are also available:
  * {{{
  *   val meanDF = dataframe.select(Summarizer.mean($"features"))
- *   val Row(meanVec) = meanDF.first()
+ *   val Row(mean_) = meanDF.first()
  * }}}
  *
  * Note: Currently, the performance of this interface is about 2x~3x slower then using the RDD
@@ -98,7 +94,8 @@ object Summarizer extends Logging {
    *  - min: the minimum for each coefficient.
    *  - normL2: the Euclidian norm for each coefficient.
    *  - normL1: the L1 norm of each coefficient (sum of the absolute values).
-   * @param metrics metrics that can be provided.
+   * @param firstMetric the metric being provided
+   * @param metrics additional metrics that can be provided.
    * @return a builder.
    * @throws IllegalArgumentException if one of the metric names is not understood.
    *
@@ -106,79 +103,37 @@ object Summarizer extends Logging {
    * interface.
    */
   @Since("2.3.0")
-  @scala.annotation.varargs
-  def metrics(metrics: String*): SummaryBuilder = {
-    require(metrics.size >= 1, "Should include at least one metric")
-    val (typedMetrics, computeMetrics) = getRelevantMetrics(metrics)
+  def metrics(firstMetric: String, metrics: String*): SummaryBuilder = {
+    val (typedMetrics, computeMetrics) = getRelevantMetrics(Seq(firstMetric) ++ metrics)
     new SummaryBuilderImpl(typedMetrics, computeMetrics)
   }
 
   @Since("2.3.0")
-  def mean(col: Column, weightCol: Column): Column = {
-    getSingleMetric(col, weightCol, "mean")
-  }
+  def mean(col: Column): Column = getSingleMetric(col, "mean")
 
   @Since("2.3.0")
-  def mean(col: Column): Column = mean(col, lit(1.0))
+  def variance(col: Column): Column = getSingleMetric(col, "variance")
 
   @Since("2.3.0")
-  def variance(col: Column, weightCol: Column): Column = {
-    getSingleMetric(col, weightCol, "variance")
-  }
+  def count(col: Column): Column = getSingleMetric(col, "count")
 
   @Since("2.3.0")
-  def variance(col: Column): Column = variance(col, lit(1.0))
+  def numNonZeros(col: Column): Column = getSingleMetric(col, "numNonZeros")
 
   @Since("2.3.0")
-  def count(col: Column, weightCol: Column): Column = {
-    getSingleMetric(col, weightCol, "count")
-  }
+  def max(col: Column): Column = getSingleMetric(col, "max")
 
   @Since("2.3.0")
-  def count(col: Column): Column = count(col, lit(1.0))
+  def min(col: Column): Column = getSingleMetric(col, "min")
 
   @Since("2.3.0")
-  def numNonZeros(col: Column, weightCol: Column): Column = {
-    getSingleMetric(col, weightCol, "numNonZeros")
-  }
+  def normL1(col: Column): Column = getSingleMetric(col, "normL1")
 
   @Since("2.3.0")
-  def numNonZeros(col: Column): Column = numNonZeros(col, lit(1.0))
+  def normL2(col: Column): Column = getSingleMetric(col, "normL2")
 
-  @Since("2.3.0")
-  def max(col: Column, weightCol: Column): Column = {
-    getSingleMetric(col, weightCol, "max")
-  }
-
-  @Since("2.3.0")
-  def max(col: Column): Column = max(col, lit(1.0))
-
-  @Since("2.3.0")
-  def min(col: Column, weightCol: Column): Column = {
-    getSingleMetric(col, weightCol, "min")
-  }
-
-  @Since("2.3.0")
-  def min(col: Column): Column = min(col, lit(1.0))
-
-  @Since("2.3.0")
-  def normL1(col: Column, weightCol: Column): Column = {
-    getSingleMetric(col, weightCol, "normL1")
-  }
-
-  @Since("2.3.0")
-  def normL1(col: Column): Column = normL1(col, lit(1.0))
-
-  @Since("2.3.0")
-  def normL2(col: Column, weightCol: Column): Column = {
-    getSingleMetric(col, weightCol, "normL2")
-  }
-
-  @Since("2.3.0")
-  def normL2(col: Column): Column = normL2(col, lit(1.0))
-
-  private def getSingleMetric(col: Column, weightCol: Column, metric: String): Column = {
-    val c1 = metrics(metric).summary(col, weightCol)
+  private def getSingleMetric(col: Column, metric: String): Column = {
+    val c1 = metrics(metric).summary(col)
     c1.getField(metric).as(s"$metric($col)")
   }
 }
@@ -232,7 +187,8 @@ private[ml] object SummaryBuilderImpl extends Logging {
     StructType(fields)
   }
 
-  private val vectorUDT = new VectorUDT
+  private val arrayDType = ArrayType(DoubleType, containsNull = false)
+  private val arrayLType = ArrayType(LongType, containsNull = false)
 
   /**
    * All the metrics that can be currently computed by Spark for vectors.
@@ -241,14 +197,14 @@ private[ml] object SummaryBuilderImpl extends Logging {
    * metrics that need to de computed internally to get the final result.
    */
   private val allMetrics: Seq[(String, Metric, DataType, Seq[ComputeMetric])] = Seq(
-    ("mean", Mean, vectorUDT, Seq(ComputeMean, ComputeWeightSum)),
-    ("variance", Variance, vectorUDT, Seq(ComputeWeightSum, ComputeMean, ComputeM2n)),
+    ("mean", Mean, arrayDType, Seq(ComputeMean, ComputeWeightSum)),
+    ("variance", Variance, arrayDType, Seq(ComputeWeightSum, ComputeMean, ComputeM2n)),
     ("count", Count, LongType, Seq()),
-    ("numNonZeros", NumNonZeros, vectorUDT, Seq(ComputeNNZ)),
-    ("max", Max, vectorUDT, Seq(ComputeMax, ComputeNNZ)),
-    ("min", Min, vectorUDT, Seq(ComputeMin, ComputeNNZ)),
-    ("normL2", NormL2, vectorUDT, Seq(ComputeM2)),
-    ("normL1", NormL1, vectorUDT, Seq(ComputeL1))
+    ("numNonZeros", NumNonZeros, arrayLType, Seq(ComputeNNZ)),
+    ("max", Max, arrayDType, Seq(ComputeMax, ComputeNNZ)),
+    ("min", Min, arrayDType, Seq(ComputeMin, ComputeNNZ)),
+    ("normL2", NormL2, arrayDType, Seq(ComputeM2)),
+    ("normL1", NormL1, arrayDType, Seq(ComputeL1))
   )
 
   /**
@@ -571,28 +527,27 @@ private[ml] object SummaryBuilderImpl extends Logging {
       weightExpr: Expression,
       mutableAggBufferOffset: Int,
       inputAggBufferOffset: Int)
-    extends TypedImperativeAggregate[SummarizerBuffer] with ImplicitCastInputTypes {
+    extends TypedImperativeAggregate[SummarizerBuffer] {
 
-    override def eval(state: SummarizerBuffer): Any = {
+    override def eval(state: SummarizerBuffer): InternalRow = {
       val metrics = requestedMetrics.map {
-        case Mean => vectorUDT.serialize(state.mean)
-        case Variance => vectorUDT.serialize(state.variance)
+        case Mean => UnsafeArrayData.fromPrimitiveArray(state.mean.toArray)
+        case Variance => UnsafeArrayData.fromPrimitiveArray(state.variance.toArray)
         case Count => state.count
-        case NumNonZeros => vectorUDT.serialize(state.numNonzeros)
-        case Max => vectorUDT.serialize(state.max)
-        case Min => vectorUDT.serialize(state.min)
-        case NormL2 => vectorUDT.serialize(state.normL2)
-        case NormL1 => vectorUDT.serialize(state.normL1)
+        case NumNonZeros => UnsafeArrayData.fromPrimitiveArray(
+          state.numNonzeros.toArray.map(_.toLong))
+        case Max => UnsafeArrayData.fromPrimitiveArray(state.max.toArray)
+        case Min => UnsafeArrayData.fromPrimitiveArray(state.min.toArray)
+        case NormL2 => UnsafeArrayData.fromPrimitiveArray(state.normL2.toArray)
+        case NormL1 => UnsafeArrayData.fromPrimitiveArray(state.normL1.toArray)
       }
       InternalRow.apply(metrics: _*)
     }
 
-    override def inputTypes: Seq[DataType] = vectorUDT :: DoubleType :: Nil
-
     override def children: Seq[Expression] = featuresExpr :: weightExpr :: Nil
 
     override def update(state: SummarizerBuffer, row: InternalRow): SummarizerBuffer = {
-      val features = vectorUDT.deserialize(featuresExpr.eval(row))
+      val features = udt.deserialize(featuresExpr.eval(row))
       val weight = weightExpr.eval(row).asInstanceOf[Double]
       state.add(features, weight)
       state
@@ -636,4 +591,7 @@ private[ml] object SummaryBuilderImpl extends Logging {
     override def prettyName: String = "aggregate_metrics"
 
   }
+
+  private[this] val udt = new VectorUDT
+
 }

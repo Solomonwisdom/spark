@@ -645,7 +645,7 @@ class LinearRegressionModel private[ml] (
   extends RegressionModel[Vector, LinearRegressionModel]
   with LinearRegressionParams with MLWritable {
 
-  private[ml] def this(uid: String, coefficients: Vector, intercept: Double) =
+  def this(uid: String, coefficients: Vector, intercept: Double) =
     this(uid, coefficients, intercept, 1.0)
 
   private var trainingSummary: Option[LinearRegressionTrainingSummary] = None

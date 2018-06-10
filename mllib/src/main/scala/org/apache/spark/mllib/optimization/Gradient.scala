@@ -34,8 +34,7 @@ abstract class Gradient extends Serializable {
    * @param data features for one data point
    * @param label label for this data point
    * @param weights weights/coefficients corresponding to features
-   *
-   * @return (gradient: Vector, loss: Double)
+    * @return (gradient: Vector, loss: Double)
    */
   def compute(data: Vector, label: Double, weights: Vector): (Vector, Double) = {
     val gradient = Vectors.zeros(weights.size)
@@ -51,10 +50,13 @@ abstract class Gradient extends Serializable {
    * @param label label for this data point
    * @param weights weights/coefficients corresponding to features
    * @param cumGradient the computed gradient will be added to this vector
-   *
-   * @return loss
+    * @return loss
    */
   def compute(data: Vector, label: Double, weights: Vector, cumGradient: Vector): Double
+
+  // zhipeng: only compute the loss
+  def computeLoss(data: Vector, label: Double, weights: Vector): Double
+
 }
 
 /**
@@ -272,6 +274,20 @@ class LogisticGradient(numClasses: Int) extends Gradient {
         }
     }
   }
+
+  override def computeLoss(data: Vector, label: Double, weights: Vector): Double = {
+    numClasses match {
+      case 2 =>
+        val margin = -1.0 * dot(data, weights)
+        if (label > 0) {
+          // The following is equivalent to log(1 + exp(margin)) but more numerically stable.
+          MLUtils.log1pExp(margin)
+        } else {
+          MLUtils.log1pExp(margin) - margin
+        }
+      case _ => 0.0
+    }
+  }
 }
 
 /**
@@ -280,7 +296,7 @@ class LogisticGradient(numClasses: Int) extends Gradient {
  * This is correct for the averaged least squares loss function (mean squared error)
  *              L = 1/2n ||A weights-y||^2
  * See also the documentation for the precise formulation.
- */
+  **/
 @DeveloperApi
 class LeastSquaresGradient extends Gradient {
   override def compute(data: Vector, label: Double, weights: Vector): (Vector, Double) = {
@@ -298,6 +314,11 @@ class LeastSquaresGradient extends Gradient {
       cumGradient: Vector): Double = {
     val diff = dot(data, weights) - label
     axpy(diff, data, cumGradient)
+    diff * diff / 2.0
+  }
+
+  override def computeLoss(data: Vector, label: Double, weights: Vector): Double = {
+    val diff = dot(data, weights) - label
     diff * diff / 2.0
   }
 }
@@ -341,4 +362,16 @@ class HingeGradient extends Gradient {
       0.0
     }
   }
+
+  override def computeLoss(data: Vector, label: Double, weights: Vector): Double = {
+    val dotProduct = dot(data, weights)
+    val labelScaled = 2 * label - 1.0
+    if(1.0 > labelScaled * dotProduct){
+      1 - labelScaled * dotProduct
+    }
+    else{
+      0.0
+    }
+  }
+
 }

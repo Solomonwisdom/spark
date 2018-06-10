@@ -17,14 +17,15 @@
 package org.apache.spark.ml.optim.loss
 
 import scala.reflect.ClassTag
-
 import breeze.linalg.{DenseVector => BDV}
 import breeze.optimize.DiffFunction
-
 import org.apache.spark.broadcast.Broadcast
+import org.apache.spark.internal.Logging
+import org.apache.spark.ml.feature.Instance
 import org.apache.spark.ml.linalg.{BLAS, Vector, Vectors}
 import org.apache.spark.ml.optim.aggregator.DifferentiableLossAggregator
 import org.apache.spark.rdd.RDD
+import java.util.Calendar
 
 /**
  * This class computes the gradient and loss of a differentiable loss function by mapping a
@@ -51,13 +52,15 @@ private[ml] class RDDLossFunction[
     getAggregator: (Broadcast[Vector] => Agg),
     regularization: Option[DifferentiableRegularization[Vector]],
     aggregationDepth: Int = 2)
-  extends DiffFunction[BDV[Double]] {
+  extends DiffFunction[BDV[Double]] with Logging{
 
   override def calculate(coefficients: BDV[Double]): (Double, BDV[Double]) = {
     val bcCoefficients = instances.context.broadcast(Vectors.fromBreeze(coefficients))
     val thisAgg = getAggregator(bcCoefficients)
     val seqOp = (agg: Agg, x: T) => agg.add(x)
     val combOp = (agg1: Agg, agg2: Agg) => agg1.merge(agg2)
+    // this is where the treeAggregate always happens, ghand
+    val treeAggregateStartTime = System.currentTimeMillis()
     val newAgg = instances.treeAggregate(thisAgg)(seqOp, combOp, aggregationDepth)
     val gradient = newAgg.gradient
     val regLoss = regularization.map { regFun =>
@@ -66,6 +69,12 @@ private[ml] class RDDLossFunction[
       regLoss
     }.getOrElse(0.0)
     bcCoefficients.destroy(blocking = false)
+    val treeAggregateEndTime = System.currentTimeMillis()
+
+    logInfo(s"ghand=calulateObj(includeLineSearchAndCalculate)=" +
+      s"start:${treeAggregateStartTime}=end:${treeAggregateEndTime}=" +
+      s"duration:${treeAggregateEndTime - treeAggregateStartTime}=currentTime:${Calendar.getInstance().getTime}" +
+      s"=loss=${newAgg.loss + regLoss}")
     (newAgg.loss + regLoss, gradient.asBreeze.toDenseVector)
   }
 }
